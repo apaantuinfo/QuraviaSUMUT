@@ -87,6 +87,7 @@ svg {
 .app-shell {
   position: relative;
   width: min(100%, 520px);
+  min-width: 0;
   min-height: 100dvh;
   margin: 0 auto;
   padding: env(safe-area-inset-top) 0 calc(92px + env(safe-area-inset-bottom));
@@ -206,6 +207,7 @@ svg {
 }
 
 .screen {
+  min-width: 0;
   padding: 8px 20px 32px;
   animation: screen-in 220ms ease-out;
 }
@@ -420,7 +422,7 @@ svg {
 
 .feature-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -529,6 +531,7 @@ svg {
 
 .popular-list {
   display: grid;
+  max-width: 100%;
   grid-auto-columns: minmax(172px, 1fr);
   grid-auto-flow: column;
   gap: 11px;
@@ -746,12 +749,15 @@ svg {
 .surah-list {
   display: grid;
   margin-top: 5px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 9px;
 }
 
 .surah-row {
   display: flex;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   min-height: 78px;
   padding: 13px 14px;
   align-items: center;
@@ -796,15 +802,16 @@ svg {
 }
 
 .surah-main small {
-  overflow: hidden;
   margin-top: 4px;
   color: var(--muted);
   font-size: 0.67rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .surah-arabic {
+  flex: 0 0 auto;
+  max-width: 38%;
   min-width: 75px;
   color: var(--cream);
   font-family: "Noto Naskh Arabic", "Times New Roman", serif;
@@ -815,7 +822,7 @@ svg {
 .short-summary {
   display: grid;
   margin: 0 0 18px;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   background: rgba(255, 255, 255, 0.045);
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 18px;
@@ -869,7 +876,7 @@ svg {
   overflow: hidden;
   margin: 8px 0 12px;
   padding: 24px;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 14px;
   background: linear-gradient(135deg, #0d5943, #0a4637);
@@ -932,9 +939,10 @@ svg {
   cursor: pointer;
 }
 
-.verse-list { display: grid; gap: 10px; }
+.verse-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 
 .verse-card {
+  min-width: 0;
   padding: 18px 17px;
   background: rgba(255, 255, 255, 0.042);
   border: 1px solid rgba(216, 241, 225, 0.1);
@@ -996,6 +1004,7 @@ svg {
 }
 
 .verse-latin {
+  overflow-wrap: anywhere;
   margin: 0 0 9px;
   color: var(--gold-300);
   font-size: 0.76rem;
@@ -1004,6 +1013,7 @@ svg {
 }
 
 .verse-translation {
+  overflow-wrap: anywhere;
   margin: 0;
   color: #c6d8cf;
   font-size: 0.79rem;
@@ -1092,6 +1102,7 @@ svg {
 
 .tasbih-controls {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -1151,6 +1162,7 @@ svg {
 
 .qibla-gate,
 .qibla-panel {
+  min-width: 0;
   padding: 25px 21px;
   text-align: center;
   background: rgba(255, 255, 255, 0.048);
@@ -1250,7 +1262,10 @@ svg {
   box-shadow:
     inset 0 0 0 13px rgba(255, 255, 255, 0.025),
     0 20px 50px rgba(0, 28, 20, 0.3);
-  transition: transform 120ms linear;
+  /* Rotation is smoothed in JS every frame; a CSS transition on top of it
+     makes the dial fight itself and also spins backwards at the 359°/0° wrap. */
+  will-change: transform;
+  backface-visibility: hidden;
 }
 
 .compass-ticks {
@@ -1276,6 +1291,8 @@ svg {
 .direction--e { top: 50%; right: 17px; transform: translateY(-50%); }
 .direction--w { top: 50%; left: 17px; transform: translateY(-50%); }
 
+.screen[data-screen="qibla"] { overflow-anchor: none; }
+
 .qibla-needle {
   position: absolute;
   z-index: 3;
@@ -1284,7 +1301,8 @@ svg {
   top: 8%;
   left: calc(50% - 3.5px);
   transform-origin: 50% 100%;
-  transition: transform 120ms linear;
+  will-change: transform;
+  backface-visibility: hidden;
 }
 
 .needle-line {
@@ -1329,8 +1347,18 @@ svg {
 }
 
 .bearing-card > span { color: var(--muted); font-size: 0.68rem; }
-.bearing-card strong { margin: 3px 0; color: var(--gold-300); font-size: 2rem; }
-.bearing-card small { color: var(--muted); font-size: 0.64rem; }
+.bearing-card strong { margin: 3px 0; color: var(--gold-300); font-size: 2rem; font-variant-numeric: tabular-nums; }
+.bearing-card small {
+  display: block;
+  min-height: 2.9em; /* reserve two lines so changing status text never shifts the page */
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.compass-wrap--aligned .compass-dial { border-color: rgba(130, 212, 154, 0.75); }
+.compass-wrap--aligned .kaaba-symbol { color: #82d49a; }
 
 .qibla-hint {
   margin: 12px 0 0;
@@ -1533,6 +1561,140 @@ input:focus-visible {
   outline: 3px solid rgba(248, 217, 120, 0.75);
   outline-offset: 3px;
 }
+
+/* ---- Nearest mosque ---- */
+.mosque-block {
+  margin-top: 20px;
+  padding-top: 20px;
+  text-align: left;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  animation: screen-in 260ms ease-out;
+}
+
+.mosque-head {
+  display: flex;
+  margin-bottom: 14px;
+  align-items: center;
+  gap: 12px;
+}
+
+.mosque-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--gold-300);
+  background: rgba(244, 195, 69, 0.09);
+  border: 1px solid rgba(244, 195, 69, 0.17);
+  border-radius: 14px;
+}
+
+.mosque-icon svg,
+.mosque-button svg {
+  width: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.mosque-head > div { min-width: 0; }
+.mosque-head strong { display: block; font-size: 0.92rem; }
+.mosque-head small { display: block; margin-top: 2px; color: var(--muted); font-size: 0.68rem; line-height: 1.4; }
+
+.mosque-button {
+  background: var(--sage-300);
+}
+
+.mosque-button:disabled {
+  opacity: 0.75;
+  cursor: progress;
+}
+
+.mosque-note {
+  margin: 10px 0 0;
+  color: #8ea99e;
+  font-size: 0.64rem;
+  line-height: 1.5;
+}
+
+.mosque-status {
+  margin: 12px 0 0;
+  color: var(--gold-300);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.mosque-status:empty { display: none; }
+
+.mosque-list {
+  display: grid;
+  margin: 12px 0 0;
+  padding: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  list-style: none;
+}
+
+.mosque-item {
+  display: flex;
+  min-width: 0;
+  padding: 12px;
+  align-items: center;
+  gap: 11px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(213, 240, 223, 0.105);
+  border-radius: 15px;
+}
+
+.mosque-rank {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--gold-300);
+  background: rgba(244, 195, 69, 0.09);
+  border: 1px solid rgba(244, 195, 69, 0.18);
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.mosque-info { min-width: 0; flex: 1; }
+.mosque-info strong { display: block; font-size: 0.84rem; line-height: 1.3; overflow-wrap: anywhere; }
+.mosque-info small { display: block; margin-top: 3px; color: var(--muted); font-size: 0.66rem; line-height: 1.4; overflow-wrap: anywhere; }
+
+.mosque-route,
+.mosque-maps-link {
+  display: inline-flex;
+  min-height: 36px;
+  padding: 0 13px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--green-950);
+  background: var(--gold-400);
+  border-radius: 11px;
+  font-size: 0.7rem;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.mosque-maps-link {
+  display: flex;
+  margin-top: 12px;
+  min-height: 44px;
+  color: var(--cream);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  font-size: 0.74rem;
+}
+
+.mosque-maps-link[hidden] { display: none; }
 
 @media (hover: hover) {
   .feature-card:hover,

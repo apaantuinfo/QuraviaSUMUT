@@ -7,14 +7,14 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="SumutMengaji" />
+    <meta name="apple-mobile-web-app-title" content="Quravia" />
     <meta name="description" content="Al-Qur'an, surat pendek, tasbih digital, dan kompas kiblat khusus Sumatera Utara." />
-    <meta property="og:title" content="SumutMengaji" />
+    <meta property="og:title" content="Quravia" />
     <meta property="og:description" content="Teman ibadah harian dalam satu aplikasi ringan." />
     <meta property="og:type" content="website" />
     <meta property="og:image" content="./assets/social-preview.png" />
     <meta name="twitter:card" content="summary_large_image" />
-    <title>SumutMengaji</title>
+    <title>Quravia</title>
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./assets/icon-192.png" />
@@ -45,7 +45,7 @@
       </div>
     </div>
 
-    <main id="app" class="app-shell" aria-live="polite">
+    <main id="app" class="app-shell">
       <header class="topbar">
         <button id="back-button" class="icon-button" type="button" aria-label="Kembali" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
@@ -59,7 +59,7 @@
           </div>
           <div>
             <span id="header-kicker" class="header-kicker">ASSALAMU’ALAIKUM</span>
-            <strong id="header-title">SumutMengaji</strong>
+            <strong id="header-title">Quravia</strong>
           </div>
         </div>
         <button id="install-button" class="icon-button install-button" type="button" aria-label="Pasang aplikasi" title="Pasang aplikasi">
@@ -203,7 +203,7 @@
 
       <section id="screen-qibla" class="screen" data-screen="qibla" hidden>
         <div class="page-heading page-heading--center">
-          <span class="eyebrow eyebrow--gold">KHUSUS SUMATERA UTARA</span><h1>Kompas Kiblat</h1><p>Lokasi diperiksa di perangkat Anda dan tidak pernah dikirim ke server.</p>
+          <span class="eyebrow eyebrow--gold">KHUSUS SUMATERA UTARA</span><h1>Kompas Kiblat</h1><p>Lokasi dan arah kiblat dihitung di perangkat Anda. Tidak ada koordinat yang disimpan.</p>
         </div>
         <div id="qibla-gate" class="qibla-gate">
           <div class="gate-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-5.5 7-12a7 7 0 1 0-14 0c0 6.5 7 12 7 12Z"/><circle cx="12" cy="9" r="2.5" /></svg></div>
@@ -222,8 +222,20 @@
           <div class="bearing-card"><span>Arah kiblat dari posisi Anda</span><strong><span id="qibla-bearing">—</span>°</strong><small id="compass-status">Aktifkan sensor kompas untuk panduan langsung.</small></div>
           <button id="enable-compass" class="primary-button primary-button--wide" type="button">Aktifkan Sensor Kompas</button>
           <p class="qibla-hint">Pegang ponsel mendatar dan jauhkan dari benda logam. Akurasi bergantung pada sensor perangkat.</p>
+
+          <section id="mosque-block" class="mosque-block" aria-labelledby="mosque-title" hidden>
+            <div class="mosque-head">
+              <span class="mosque-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 21h18M5 21v-7h14v7M7.5 14a4.5 4.5 0 0 1 9 0M12 9.5V6.5M10.8 7.6h2.4" /></svg></span>
+              <div><strong id="mosque-title">Masjid terdekat</strong><small>Memakai GPS ponsel Anda (Geolocation browser, gratis)</small></div>
+            </div>
+            <button id="find-mosque" class="primary-button primary-button--wide mosque-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 21h18M5 21v-7h14v7M7.5 14a4.5 4.5 0 0 1 9 0M12 9.5V6.5M10.8 7.6h2.4" /></svg>Masjid Terdekat</button>
+            <p class="mosque-note">Saat tombol ditekan, koordinat perkiraan (dibulatkan ±100 m) dikirim ke layanan peta terbuka OpenStreetMap untuk mencari masjid. Tidak disimpan oleh aplikasi ini.</p>
+            <p id="mosque-status" class="mosque-status" role="status"></p>
+            <ol id="mosque-list" class="mosque-list" hidden></ol>
+            <a id="mosque-maps-link" class="mosque-maps-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Cari masjid di Google Maps</a>
+          </section>
         </div>
-        <div class="privacy-card"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg><div><strong>Privasi terjaga</strong><p>Koordinat hanya diproses di browser dan tidak disimpan.</p></div></div>
+        <div class="privacy-card"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg><div><strong>Privasi terjaga</strong><p>Koordinat diproses di browser dan tidak disimpan. Hanya saat Anda menekan “Masjid Terdekat”, koordinat perkiraan dikirim ke OpenStreetMap.</p></div></div>
       </section>
 
       <nav id="bottom-nav" class="bottom-nav" aria-label="Navigasi utama">
@@ -239,7 +251,7 @@
     <div id="install-help" class="modal" hidden>
       <button class="modal-backdrop" type="button" data-close-modal aria-label="Tutup"></button>
       <div class="modal-sheet" role="dialog" aria-modal="true" aria-labelledby="install-help-title">
-        <span class="modal-handle"></span><h2 id="install-help-title">Pasang SumutMengaji</h2><p>Jika tombol pemasangan otomatis tidak muncul:</p>
+        <span class="modal-handle"></span><h2 id="install-help-title">Pasang Quravia</h2><p>Jika tombol pemasangan otomatis tidak muncul:</p>
         <ol><li>Android Chrome: buka menu <strong>⋮</strong>, lalu pilih <strong>Instal aplikasi</strong>.</li><li>iPhone Safari: tekan <strong>Bagikan</strong>, lalu pilih <strong>Tambahkan ke Layar Utama</strong>.</li></ol>
         <button class="primary-button primary-button--wide" type="button" data-close-modal>Mengerti</button>
       </div>

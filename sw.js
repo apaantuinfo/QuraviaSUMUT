@@ -1,4 +1,4 @@
-const CACHE_VERSION = "quran-sumut-v1.0.0";
+const CACHE_VERSION = "quravia-v1.1.0";
 
 const appAssets = [
   "./",
@@ -39,9 +39,23 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+async function networkFirst(request) {
+  const cache = await caches.open(CACHE_VERSION);
+  try {
+    const response = await fetch(request);
+    if (response.ok) cache.put(request, response.clone());
+    return response;
+  } catch (error) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    throw error;
+  }
+}
+
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const requestURL = new URL(event.request.url);
+  // Third-party requests (OpenStreetMap/Overpass, maps) always go straight to the network.
   if (requestURL.origin !== self.location.origin) return;
 
   if (event.request.mode === "navigate") {
@@ -54,6 +68,14 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // App shell (HTML/CSS/JS/manifest): network first so updates reach users right away,
+  // with the cached copy as the offline fallback.
+  if (/\.(?:js|css|html|webmanifest)$/.test(requestURL.pathname)) {
+    event.respondWith(networkFirst(event.request));
+    return;
+  }
+
+  // Quran data and icons never change: cache first.
   event.respondWith(
     (async () => {
       const cached = await caches.match(event.request);

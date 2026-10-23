@@ -31,11 +31,12 @@
     readerObserver: null,
     deferredInstallPrompt: null,
     qiblaBearing: null,
-    headingReceived: false,
+    position: null,
+    mosqueBusy: false,
     toastTimer: null,
-    arabicSize: storage.get("quranSumutArabicSize", 32),
-    bookmarks: storage.get("quranSumutBookmarks", []),
-    tasbih: storage.get("quranSumutTasbih", {
+    arabicSize: storage.get("QuraviaArabicSize", 32),
+    bookmarks: storage.get("QuraviaBookmarks", []),
+    tasbih: storage.get("QuraviaTasbih", {
       dhikr: "Subhanallah",
       target: 33,
       counts: { Subhanallah: 0, Alhamdulillah: 0, "Allahu Akbar": 0 },
@@ -43,7 +44,7 @@
   };
 
   const screenMeta = {
-    home: ["ASSALAMU’ALAIKUM", "Quran Sumut"],
+    home: ["ASSALAMU’ALAIKUM", "Quravia"],
     quran: ["BACA & RENUNGKAN", "Al-Qur’an"],
     short: ["JUZ AMMA", "Surat Pendek"],
     tasbih: ["DZIKIR HARIAN", "Tasbih Digital"],
@@ -109,7 +110,8 @@
     });
 
     if (screen === "home" && state.surahs.length) updateContinueCard();
-    if (!options.keepScroll) window.scrollTo({ top: 0, behavior: "auto" });
+    syncCompass();
+    if (!options.keepScroll) window.scrollTo({ top: 0, behavior: "instant" });
   }
 
   function surahTypeLabel(type) {
@@ -171,7 +173,7 @@
   }
 
   function updateContinueCard() {
-    const lastRead = storage.get("quranSumutLastRead", { surah: 1, ayah: 1 });
+    const lastRead = storage.get("QuraviaLastRead", { surah: 1, ayah: 1 });
     const surah = state.surahs.find((item) => item.id === lastRead.surah) || state.surahs[0];
     if (!surah) return;
     $("#continue-title").textContent = surah.transliteration;
@@ -211,7 +213,7 @@
           .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
         if (!visible) return;
         const ayah = Number(visible.target.dataset.verse);
-        storage.set("quranSumutLastRead", { surah: surah.id, ayah });
+        storage.set("QuraviaLastRead", { surah: surah.id, ayah });
       },
       { rootMargin: "-20% 0px -55% 0px", threshold: [0.1, 0.45] },
     );
@@ -245,7 +247,7 @@
 
       $("#reader-loading").hidden = true;
       $("#reader-content").hidden = false;
-      storage.set("quranSumutLastRead", { surah: surah.id, ayah: 1 });
+      storage.set("QuraviaLastRead", { surah: surah.id, ayah: 1 });
       observeReaderProgress(surah);
     } catch {
       $("#reader-loading").innerHTML = `<p>Surah belum dapat dimuat. Periksa koneksi lalu coba lagi.</p><button class="secondary-button" type="button" id="reader-retry">Coba Lagi</button>`;
@@ -258,7 +260,7 @@
 
   function setArabicSize(nextSize) {
     state.arabicSize = Math.max(25, Math.min(46, nextSize));
-    storage.set("quranSumutArabicSize", state.arabicSize);
+    storage.set("QuraviaArabicSize", state.arabicSize);
     document.documentElement.style.setProperty("--arabic-size", `${state.arabicSize}px`);
     showToast(`Ukuran teks Arab: ${state.arabicSize}px`);
   }
@@ -275,7 +277,7 @@
 
     $$(".dhikr-chip").forEach((button) => button.classList.toggle("dhikr-chip--active", button.dataset.dhikr === dhikr));
     $$(".target-chip").forEach((button) => button.classList.toggle("target-chip--active", Number(button.dataset.target) === target));
-    storage.set("quranSumutTasbih", state.tasbih);
+    storage.set("QuraviaTasbih", state.tasbih);
   }
 
   function incrementTasbih() {
@@ -388,11 +390,13 @@
           return;
         }
 
+        state.position = { latitude, longitude, accuracy };
         state.qiblaBearing = calculateQiblaBearing(latitude, longitude);
         $("#qibla-bearing").textContent = String(Math.round(state.qiblaBearing));
         $("#approved-coordinates").textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)} • akurasi ±${Math.round(accuracy)} m`;
         $("#qibla-gate").hidden = true;
         $("#qibla-compass-panel").hidden = false;
+        $("#mosque-block").hidden = false; // shown only once the Qibla direction is known
         showToast("Lokasi Sumatera Utara berhasil diverifikasi.");
       },
       (error) => {
@@ -403,24 +407,142 @@
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Compass
+  //
+  // Why the old version shook:
+  //  1. It listened to "deviceorientationabsolute" AND "deviceorientation". On
+  //     Android both fire; the second one reports a *relative* alpha, so the dial
+  //     flipped between two unrelated headings dozens of times per second.
+  //  2. Raw sensor values were applied directly (no smoothing / dead-band).
+  //  3. A CSS transition on top of per-event updates fought itself and spun the
+  //     whole dial backwards at the 359°→0° wrap.
+  //  4. Every event rewrote text in the page, causing layout work at ~60 Hz.
+  //  5. The listeners were never removed when leaving the Qibla screen.
+  // ---------------------------------------------------------------------------
+  const compass = {
+    enabled: false,
+    active: false,
+    raf: 0,
+    target: null,
+    shown: null,
+    lastStatusAt: 0,
+    lastStatusKey: "",
+    aligned: false,
+    gotRelativeOnly: false,
+    useAbsoluteEvent: "ondeviceorientationabsolute" in window,
+  };
+
+  const normalizeAngle = (degrees) => ((degrees % 360) + 360) % 360;
+  const shortestDelta = (from, to) => ((to - from + 540) % 360) - 180;
+
+  // Heading (0° = north, clockwise) of the direction the phone points to.
+  // Works flat on a table (top edge) and held upright (back camera).
+  function tiltCompensatedHeading(alpha, beta, gamma) {
+    const rad = Math.PI / 180;
+    const [a, b, g] = [alpha * rad, beta * rad, gamma * rad];
+    const [cA, sA, cB, sB, cG, sG] = [Math.cos(a), Math.sin(a), Math.cos(b), Math.sin(b), Math.cos(g), Math.sin(g)];
+    const topEast = -cB * sA;
+    const topNorth = cA * cB;
+    const backEast = -(cG * sA * sB + cA * sG);
+    const backNorth = -(sA * sG - cA * cG * sB);
+    const useTop = Math.hypot(topEast, topNorth) >= Math.hypot(backEast, backNorth);
+    const east = useTop ? topEast : backEast;
+    const north = useTop ? topNorth : backNorth;
+    return normalizeAngle(Math.atan2(east, north) / rad);
+  }
+
+  function headingFromEvent(event) {
+    // iOS Safari supplies a ready-made, calibrated compass heading.
+    if (typeof event.webkitCompassHeading === "number" && Number.isFinite(event.webkitCompassHeading)) {
+      return normalizeAngle(event.webkitCompassHeading);
+    }
+    // Elsewhere only an absolute (magnetic-north) reference is usable as a compass.
+    const absolute = event.type === "deviceorientationabsolute" || event.absolute === true;
+    if (!absolute) {
+      compass.gotRelativeOnly = true;
+      return null;
+    }
+    if (typeof event.alpha !== "number") return null;
+    const screenAngle = screen.orientation?.angle ?? window.orientation ?? 0;
+    const heading =
+      typeof event.beta === "number" && typeof event.gamma === "number"
+        ? tiltCompensatedHeading(event.alpha, event.beta, event.gamma)
+        : 360 - event.alpha;
+    return normalizeAngle(heading + screenAngle);
+  }
+
   function handleOrientation(event) {
     if (state.qiblaBearing === null) return;
-    let heading;
-    if (typeof event.webkitCompassHeading === "number") {
-      heading = event.webkitCompassHeading;
-    } else if (typeof event.alpha === "number") {
-      const screenAngle = screen.orientation?.angle ?? window.orientation ?? 0;
-      heading = (360 - event.alpha + screenAngle + 360) % 360;
-    } else {
+    const heading = headingFromEvent(event);
+    // Only store the value; drawing happens once per animation frame.
+    if (heading !== null) compass.target = heading;
+  }
+
+  function renderCompass(heading) {
+    const relativeQibla = normalizeAngle(state.qiblaBearing - heading);
+    $("#compass-dial").style.transform = `rotate(${(-heading).toFixed(2)}deg)`;
+    $("#qibla-needle").style.transform = `rotate(${relativeQibla.toFixed(2)}deg)`;
+
+    const aligned = relativeQibla <= 4 || relativeQibla >= 356;
+    if (aligned !== compass.aligned) {
+      compass.aligned = aligned;
+      $(".compass-wrap").classList.toggle("compass-wrap--aligned", aligned);
+    }
+
+    // Text is updated at most ~4×/second and only when it actually changes.
+    const now = performance.now();
+    const key = `${Math.round(heading)}|${aligned}`;
+    if (key !== compass.lastStatusKey && now - compass.lastStatusAt > 250) {
+      compass.lastStatusKey = key;
+      compass.lastStatusAt = now;
+      $("#compass-status").textContent = aligned
+        ? `Arah ponsel ${Math.round(heading)}° • Anda sudah menghadap kiblat.`
+        : `Arah ponsel ${Math.round(heading)}° • putar hingga penunjuk emas menghadap atas.`;
+    }
+  }
+
+  function compassFrame() {
+    if (!compass.active) return;
+    compass.raf = requestAnimationFrame(compassFrame);
+    if (compass.target === null || state.qiblaBearing === null) return;
+
+    if (compass.shown === null) {
+      compass.shown = compass.target;
+      $("#enable-compass").hidden = true;
+      renderCompass(compass.shown);
       return;
     }
 
-    state.headingReceived = true;
-    const relativeQibla = (state.qiblaBearing - heading + 360) % 360;
-    $("#compass-dial").style.transform = `rotate(${-heading}deg)`;
-    $("#qibla-needle").style.transform = `rotate(${relativeQibla}deg)`;
-    $("#compass-status").textContent = `Arah ponsel ${Math.round(heading)}° • putar hingga penunjuk emas menghadap atas.`;
-    $("#enable-compass").hidden = true;
+    const delta = shortestDelta(compass.shown, compass.target);
+    if (Math.abs(delta) < 0.4) return; // dead-band: ignore sensor noise
+    // Small changes are smoothed heavily, large turns are followed quickly.
+    const factor = Math.min(0.35, Math.max(0.08, Math.abs(delta) / 70));
+    compass.shown = normalizeAngle(compass.shown + delta * factor);
+    renderCompass(compass.shown);
+  }
+
+  function startCompassLoop() {
+    if (compass.active) return;
+    compass.active = true;
+    compass.shown = null;
+    window.addEventListener(compass.useAbsoluteEvent ? "deviceorientationabsolute" : "deviceorientation", handleOrientation, true);
+    compass.raf = requestAnimationFrame(compassFrame);
+  }
+
+  function stopCompassLoop() {
+    if (!compass.active) return;
+    compass.active = false;
+    cancelAnimationFrame(compass.raf);
+    window.removeEventListener("deviceorientationabsolute", handleOrientation, true);
+    window.removeEventListener("deviceorientation", handleOrientation, true);
+  }
+
+  // Run the sensor only while the Qibla screen is visible.
+  function syncCompass() {
+    const shouldRun = compass.enabled && state.currentScreen === "qibla" && !document.hidden;
+    if (shouldRun) startCompassLoop();
+    else stopCompassLoop();
   }
 
   async function enableCompass() {
@@ -437,17 +559,214 @@
         if (permission !== "granted") throw new Error("permission-denied");
       }
 
-      state.headingReceived = false;
-      window.addEventListener("deviceorientationabsolute", handleOrientation, true);
-      window.addEventListener("deviceorientation", handleOrientation, true);
+      compass.enabled = true;
+      compass.target = null;
+      compass.gotRelativeOnly = false;
       $("#compass-status").textContent = "Menunggu data sensor kompas…";
+      syncCompass();
       setTimeout(() => {
-        if (!state.headingReceived) {
-          $("#compass-status").textContent = "Sensor belum mengirim arah. Kalibrasi ponsel dengan gerakan angka delapan.";
+        if (compass.enabled && compass.target === null) {
+          $("#compass-status").textContent = compass.gotRelativeOnly
+            ? "Perangkat ini tidak menyediakan sensor arah utara. Gunakan angka bearing dengan kompas biasa."
+            : "Sensor belum mengirim arah. Kalibrasi ponsel dengan gerakan angka delapan.";
         }
-      }, 2200);
+      }, 2500);
     } catch {
       $("#compass-status").textContent = "Izin sensor kompas ditolak. Aktifkan izin gerakan/orientasi di pengaturan browser.";
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Nearest mosque: browser Geolocation (free) + OpenStreetMap Overpass (free, no key)
+  // ---------------------------------------------------------------------------
+  const OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+  ];
+  const MOSQUE_RADII = [2000, 6000, 15000];
+  const MAX_MOSQUES_SHOWN = 6;
+
+  function haversineMeters(lat1, lon1, lat2, lon2) {
+    const toRad = (d) => (d * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function formatDistance(meters) {
+    if (meters < 1000) return `${Math.max(10, Math.round(meters / 10) * 10)} m`;
+    return `${(meters / 1000).toFixed(1).replace(".", ",")} km`;
+  }
+
+  function mapsSearchUrl(latitude, longitude) {
+    return `https://www.google.com/maps/search/masjid/@${latitude.toFixed(5)},${longitude.toFixed(5)},15z`;
+  }
+
+  function mapsRouteUrl(latitude, longitude) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${latitude.toFixed(6)},${longitude.toFixed(6)}`;
+  }
+
+  function getFreshPosition() {
+    return new Promise((resolve, reject) => {
+      if (!window.isSecureContext || !navigator.geolocation) {
+        reject({ code: 0 });
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        ({ coords }) => resolve({ latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy }),
+        reject,
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 },
+      );
+    });
+  }
+
+  async function fetchOverpass(query) {
+    let lastError;
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          body: new URLSearchParams({ data: query }),
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        return Array.isArray(data.elements) ? data.elements : [];
+      } catch (error) {
+        lastError = error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw lastError || new Error("overpass-failed");
+  }
+
+  async function searchMosques(position, radius) {
+    // Coordinates are rounded to 3 decimals (~100 m) before leaving the device.
+    const lat = Number(position.latitude.toFixed(3));
+    const lon = Number(position.longitude.toFixed(3));
+    const query =
+      `[out:json][timeout:20];(` +
+      `nwr["amenity"="place_of_worship"]["religion"="muslim"](around:${radius},${lat},${lon});` +
+      `nwr["building"="mosque"](around:${radius},${lat},${lon});` +
+      `);out center tags;`;
+    const elements = await fetchOverpass(query);
+
+    const found = [];
+    for (const element of elements) {
+      const latitude = element.lat ?? element.center?.lat;
+      const longitude = element.lon ?? element.center?.lon;
+      if (typeof latitude !== "number" || typeof longitude !== "number") continue;
+      const tags = element.tags || {};
+      const name = (tags.name || tags["name:id"] || tags["name:en"] || "").trim();
+      const kind = /musala|mushal|musholla|mushola|surau|langgar/i.test(name) ? "Musala" : "Masjid";
+      const address = [tags["addr:street"], tags["addr:suburb"] || tags["addr:city"]].filter(Boolean).join(", ");
+      found.push({
+        name: name || "Masjid (nama belum tercatat)",
+        hasName: Boolean(name),
+        kind,
+        address,
+        latitude,
+        longitude,
+        distance: haversineMeters(position.latitude, position.longitude, latitude, longitude),
+      });
+    }
+
+    found.sort((a, b) => a.distance - b.distance);
+    // OpenStreetMap sometimes maps one mosque twice (building + point); drop near-duplicates.
+    const unique = [];
+    for (const item of found) {
+      const duplicate = unique.some(
+        (kept) =>
+          haversineMeters(kept.latitude, kept.longitude, item.latitude, item.longitude) < 60 &&
+          (!kept.hasName || !item.hasName || kept.name.toLowerCase() === item.name.toLowerCase()),
+      );
+      if (!duplicate) unique.push(item);
+    }
+    return unique;
+  }
+
+  function renderMosques(mosques, radius) {
+    const list = $("#mosque-list");
+    list.innerHTML = mosques
+      .slice(0, MAX_MOSQUES_SHOWN)
+      .map(
+        (mosque, index) => `
+          <li class="mosque-item">
+            <span class="mosque-rank">${index + 1}</span>
+            <div class="mosque-info">
+              <strong>${escapeHTML(mosque.name)}</strong>
+              <small>${mosque.kind} • ${formatDistance(mosque.distance)}${mosque.address ? ` • ${escapeHTML(mosque.address)}` : ""}</small>
+            </div>
+            <a class="mosque-route" href="${mapsRouteUrl(mosque.latitude, mosque.longitude)}" target="_blank" rel="noopener noreferrer" aria-label="Buka rute ke ${escapeHTML(mosque.name)}">Rute</a>
+          </li>`,
+      )
+      .join("");
+    list.hidden = false;
+    $("#mosque-status").textContent = `${Math.min(mosques.length, MAX_MOSQUES_SHOWN)} masjid terdekat dalam radius ${radius / 1000} km.`;
+  }
+
+  async function findNearestMosque() {
+    if (state.mosqueBusy) return;
+    state.mosqueBusy = true;
+
+    const button = $("#find-mosque");
+    const status = $("#mosque-status");
+    const list = $("#mosque-list");
+    const mapsLink = $("#mosque-maps-link");
+    list.hidden = true;
+    list.innerHTML = "";
+    mapsLink.hidden = true;
+    status.textContent = "Menentukan lokasi GPS Anda…";
+    setButtonLoading(button, true, "Mencari masjid…");
+
+    let position = null;
+    try {
+      try {
+        position = await getFreshPosition();
+        state.position = position;
+      } catch (error) {
+        if (!state.position) {
+          status.textContent = locationErrorMessage(error.code ? error : { code: 0, PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+          return;
+        }
+        position = state.position; // fall back to the position that unlocked the compass
+      }
+
+      mapsLink.href = mapsSearchUrl(position.latitude, position.longitude);
+
+      if (navigator.onLine === false) {
+        status.textContent = "Tidak ada koneksi internet. Pencarian masjid membutuhkan internet.";
+        mapsLink.hidden = false;
+        return;
+      }
+
+      status.textContent = "Mencari masjid di sekitar Anda…";
+      let mosques = [];
+      let usedRadius = MOSQUE_RADII[0];
+      for (const radius of MOSQUE_RADII) {
+        usedRadius = radius;
+        mosques = await searchMosques(position, radius);
+        if (mosques.length >= 3) break;
+      }
+
+      if (!mosques.length) {
+        status.textContent = `Belum ada data masjid di OpenStreetMap dalam radius ${usedRadius / 1000} km. Coba cari lewat Google Maps.`;
+        mapsLink.hidden = false;
+        return;
+      }
+
+      renderMosques(mosques, usedRadius);
+      mapsLink.hidden = false;
+    } catch {
+      status.textContent = "Layanan peta sedang sibuk atau tidak terjangkau. Coba lagi sebentar lagi, atau cari lewat Google Maps.";
+      if (position) mapsLink.hidden = false;
+    } finally {
+      setButtonLoading(button, false);
+      state.mosqueBusy = false;
     }
   }
 
@@ -459,7 +778,7 @@
     if (state.deferredInstallPrompt) {
       state.deferredInstallPrompt.prompt();
       const result = await state.deferredInstallPrompt.userChoice;
-      if (result.outcome === "accepted") showToast("Quran Sumut sedang dipasang.");
+      if (result.outcome === "accepted") showToast("Quravia sedang dipasang.");
       state.deferredInstallPrompt = null;
       return;
     }
@@ -478,7 +797,7 @@
     window.addEventListener("appinstalled", () => {
       state.deferredInstallPrompt = null;
       $("#install-button").hidden = true;
-      showToast("Quran Sumut berhasil dipasang.");
+      showToast("Quravia berhasil dipasang.");
     });
   }
 
@@ -524,7 +843,7 @@
         button.classList.add("bookmark-button--active");
         showToast("Ayat disimpan sebagai penanda.");
       }
-      storage.set("quranSumutBookmarks", state.bookmarks);
+      storage.set("QuraviaBookmarks", state.bookmarks);
     });
 
     $("#tasbih-button").addEventListener("click", incrementTasbih);
@@ -544,11 +863,13 @@
 
     $("#check-location").addEventListener("click", verifyLocation);
     $("#enable-compass").addEventListener("click", enableCompass);
+    $("#find-mosque").addEventListener("click", findNearestMosque);
+    document.addEventListener("visibilitychange", syncCompass);
     $("#install-button").addEventListener("click", handleInstall);
     $$('[data-close-modal]').forEach((button) => button.addEventListener("click", () => { $("#install-help").hidden = true; }));
 
     $("#start-app").addEventListener("click", () => {
-      storage.set("quranSumutOnboarded", true);
+      storage.set("QuraviaOnboarded", true);
       $("#onboarding").hidden = true;
     });
 
@@ -580,7 +901,7 @@
   function initialize() {
     const today = new Intl.DateTimeFormat("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date());
     $("#today-label").textContent = today;
-    $("#onboarding").hidden = storage.get("quranSumutOnboarded", false);
+    $("#onboarding").hidden = storage.get("QuraviaOnboarded", false);
     document.documentElement.style.setProperty("--arabic-size", `${state.arabicSize}px`);
     bindEvents();
     updateTasbih();
