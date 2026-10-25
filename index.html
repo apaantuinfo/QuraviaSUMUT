@@ -3,22 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#073f31" />
+    <meta name="theme-color" content="#ffffff" />
+    <script src="./js/theme-init.js?v=1.7.0"></script>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Quravia" />
-    <meta name="description" content="Al-Qur'an, surat pendek, tasbih digital, dan kompas kiblat khusus Sumatera Utara." />
+    <meta name="apple-mobile-web-app-title" content="Quravia SUMUT" />
+    <meta name="description" content="Al-Qur'an dengan murottal, jadwal salat dan adzan, surat pendek, tasbih digital, dan kompas kiblat khusus Sumatera Utara." />
     <meta property="og:title" content="Quravia" />
     <meta property="og:description" content="Teman ibadah harian dalam satu aplikasi ringan." />
     <meta property="og:type" content="website" />
     <meta property="og:image" content="./assets/social-preview.png" />
     <meta name="twitter:card" content="summary_large_image" />
-    <title>Quravia</title>
+    <title>Quravia SUMUT</title>
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="./assets/icon-192.png" />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="icon" href="./assets/favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="icon" href="./assets/favicon-48.png" type="image/png" sizes="48x48" />
+    <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png" />
+    <link rel="stylesheet" href="./styles.css?v=1.7.0" />
   </head>
   <body>
     <div class="site-backdrop" aria-hidden="true"></div>
@@ -26,11 +28,7 @@
     <div id="onboarding" class="onboarding" hidden>
       <div class="onboarding-art" aria-hidden="true">
         <div class="brand-mark brand-mark--large">
-          <svg viewBox="0 0 64 64" role="img" aria-label="Ikon Al-Qur'an">
-            <path d="M11 17.5C19 14 25.8 15 32 20.2V51c-6.3-5.2-13.2-6.3-21-3.2V17.5Z" />
-            <path d="M53 17.5C45 14 38.2 15 32 20.2V51c6.3-5.2 13.2-6.3 21-3.2V17.5Z" />
-            <path class="mark-line" d="M17 24.5c5-1 9.1.1 12 2.5M47 24.5c-5-1-9.1.1-12 2.5" />
-          </svg>
+          <img src="./assets/logo-mark-204.png" srcset="./assets/logo-mark-204.png 2x, ./assets/logo-mark-306.png 3x" width="102" height="102" alt="Logo Quravia" decoding="async" />
         </div>
         <p class="arabic-blessing" lang="ar" dir="rtl">بِسْمِ اللّٰهِ الرَّحْمٰنِ الرَّحِيْمِ</p>
       </div>
@@ -52,19 +50,20 @@
         </button>
         <div class="brand-lockup">
           <div class="brand-mark">
-            <svg viewBox="0 0 64 64" aria-hidden="true">
-              <path d="M11 17.5C19 14 25.8 15 32 20.2V51c-6.3-5.2-13.2-6.3-21-3.2V17.5Z" />
-              <path d="M53 17.5C45 14 38.2 15 32 20.2V51c6.3-5.2 13.2-6.3 21-3.2V17.5Z" />
-            </svg>
+            <img src="./assets/logo-mark-96.png" srcset="./assets/logo-mark-96.png 2x, ./assets/logo-mark-144.png 3x" width="48" height="48" alt="" decoding="async" />
           </div>
           <div>
             <span id="header-kicker" class="header-kicker">ASSALAMU’ALAIKUM</span>
             <strong id="header-title">Quravia</strong>
           </div>
         </div>
+        <div class="header-actions">
+          <button id="theme-toggle" class="icon-button theme-toggle" type="button" aria-label="Aktifkan mode gelap" title="Ganti tema"><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" /></svg><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.2A8.5 8.5 0 1 1 9.8 3.5a6.8 6.8 0 0 0 10.7 10.7Z" /></svg></button>
+          <a id="donate-link" class="icon-button donate-nav" href="#" target="_blank" rel="noopener noreferrer" aria-label="Donasi untuk pengembang" title="Donasi untuk pengembang" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.6-9.4C.9 8 2.8 4.5 6.3 4.5c2 0 3.6 1.1 4.4 2.6l1.3 2.2 1.3-2.2c.8-1.5 2.4-2.6 4.4-2.6 3.5 0 5.4 3.5 3.9 7.1C19.5 16.4 12 21 12 21Z" /></svg></a>
         <button id="install-button" class="icon-button install-button" type="button" aria-label="Pasang aplikasi" title="Pasang aplikasi">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14" /></svg>
         </button>
+        </div>
       </header>
 
       <section id="screen-home" class="screen screen--active" data-screen="home">
@@ -90,6 +89,19 @@
           <div class="continue-arrow">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
           </div>
+        </button>
+
+
+        <button id="home-prayer-card" class="home-prayer-card" type="button" data-go="prayer" aria-label="Buka jadwal salat">
+          <span class="home-prayer-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 8v4.2l2.8 1.8" /></svg></span>
+          <span class="home-prayer-copy">
+            <small id="home-prayer-label">Waktu salat berikutnya</small>
+            <strong id="home-prayer-name">—</strong>
+          </span>
+          <span class="home-prayer-time">
+            <b id="home-prayer-time">--:--</b>
+            <small id="home-prayer-countdown">--:--:--</small>
+          </span>
         </button>
 
         <div class="section-heading">
@@ -178,8 +190,69 @@
             <button id="font-decrease" type="button" aria-label="Perkecil teks Arab">A−</button><span>Ukuran Arab</span><button id="font-increase" type="button" aria-label="Perbesar teks Arab">A+</button>
           </div>
           <div id="verse-list" class="verse-list"></div>
-          <p class="data-credit">Teks Utsmani dan terjemahan Indonesia: Quran JSON, CC BY 4.0.</p>
+          <p class="data-credit">Teks Utsmani dan terjemahan Indonesia: Quran JSON, CC BY 4.0. Audio murottal: EveryAyah.com dan Islamic Network CDN.</p>
         </div>
+      </section>
+
+      <section id="screen-prayer" class="screen" data-screen="prayer" hidden>
+        <div class="page-heading">
+          <span class="eyebrow eyebrow--gold">SUMATERA UTARA • KEMENAG RI</span>
+          <h1>Jadwal Salat</h1>
+          <p>Waktu salat lima waktu, dihitung di perangkat Anda dengan kriteria Kementerian Agama RI.</p>
+        </div>
+
+        <div id="prayer-hero" class="prayer-hero">
+          <span class="prayer-hero-label" id="prayer-hero-label">Waktu salat berikutnya</span>
+          <strong id="prayer-next-name" class="prayer-next-name">—</strong>
+          <span id="prayer-next-time" class="prayer-next-time">--:--</span>
+          <span id="prayer-countdown" class="prayer-countdown" aria-live="off">--:--:--</span>
+          <span id="prayer-now" class="prayer-now" aria-live="off"></span>
+        </div>
+
+        <div class="prayer-location">
+          <label for="prayer-city">Lokasi (kabupaten/kota)</label>
+          <div class="prayer-location-row">
+            <select id="prayer-city"></select>
+            <button id="prayer-gps" class="prayer-gps" type="button" aria-label="Pilih kota terdekat dari lokasi saya" title="Gunakan lokasi saya"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3" /><circle cx="12" cy="12" r="7.5" /></svg></button>
+          </div>
+          <small id="prayer-location-note" class="prayer-location-note" role="status"></small>
+        </div>
+
+        <div class="prayer-daynav">
+          <button id="prayer-prev-day" class="prayer-daybtn" type="button" aria-label="Hari sebelumnya"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg></button>
+          <div class="prayer-daytitle">
+            <strong id="prayer-day-title">—</strong>
+            <button id="prayer-today" class="text-button" type="button" hidden>Kembali ke hari ini</button>
+          </div>
+          <button id="prayer-next-day" class="prayer-daybtn" type="button" aria-label="Hari berikutnya"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg></button>
+        </div>
+
+        <div id="jumat-banner" class="jumat-banner" hidden>
+          <span class="jumat-badge">JUMAT</span>
+          <div><strong id="jumat-title">Salat Jumat</strong><p id="jumat-text"></p></div>
+        </div>
+
+        <ul id="prayer-list" class="prayer-list" aria-label="Daftar waktu salat"></ul>
+        <p id="jumat-next" class="jumat-next" hidden></p>
+
+        <section class="adhan-card" aria-labelledby="adhan-title">
+          <div class="adhan-head">
+            <span class="adhan-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 1 1 12 0c0 6 2 7.5 2 7.5H4S6 15 6 9ZM10 20a2 2 0 0 0 4 0" /></svg></span>
+            <div class="adhan-head-copy"><strong id="adhan-title">Adzan otomatis</strong><small id="adhan-status">Nonaktif</small></div>
+            <button id="adhan-master" class="switch" type="button" role="switch" aria-checked="false" aria-labelledby="adhan-title"><span class="switch-thumb"></span></button>
+          </div>
+          <p class="adhan-note">Adzan berkumandang saat waktu salat tiba selama Quravia terbuka. Subuh memakai adzan Subuh; Dzuhur, Ashar, Maghrib, dan Isya memakai adzan Makkah. Ketuk ikon lonceng pada daftar untuk mematikan adzan salat tertentu.</p>
+          <div class="adhan-tests">
+            <button id="adhan-test-fajr" class="adhan-test" type="button"><svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg><span>Coba adzan Subuh</span></button>
+            <button id="adhan-test-regular" class="adhan-test" type="button"><svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg><span>Coba adzan Dzuhur–Isya</span></button>
+          </div>
+          <div id="wake-row" class="adhan-wake" hidden>
+            <div><strong id="wake-title">Jaga layar tetap menyala</strong><small>Agar adzan tetap bisa berbunyi saat aplikasi dibiarkan terbuka.</small></div>
+            <button id="wake-switch" class="switch" type="button" role="switch" aria-checked="false" aria-labelledby="wake-title"><span class="switch-thumb"></span></button>
+          </div>
+        </section>
+
+        <p class="prayer-source">Metode: kriteria Kemenag RI (Subuh −20°, Isya −18°, Ashar mazhab Syafi’i, ihtiyath 2 menit, koreksi ketinggian tempat). Koordinat dan ketinggian tiap kabupaten/kota berupa perkiraan, sehingga selisih ±1 menit dari tabel resmi dapat terjadi. Rujukan resmi: <a href="https://bimasislam.kemenag.go.id/jadwalshalat" target="_blank" rel="noopener noreferrer">bimasislam.kemenag.go.id</a>. Jadwal Jumat di masjid setempat dapat berbeda dari awal waktu Dzuhur.</p>
       </section>
 
       <section id="screen-tasbih" class="screen" data-screen="tasbih" hidden>
@@ -230,16 +303,32 @@
             </div>
             <button id="find-mosque" class="primary-button primary-button--wide mosque-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 21h18M5 21v-7h14v7M7.5 14a4.5 4.5 0 0 1 9 0M12 9.5V6.5M10.8 7.6h2.4" /></svg>Masjid Terdekat</button>
             <p class="mosque-note">Saat tombol ditekan, koordinat perkiraan (dibulatkan ±100 m) dikirim ke layanan peta terbuka OpenStreetMap untuk mencari masjid. Tidak disimpan oleh aplikasi ini.</p>
-            <p id="mosque-status" class="mosque-status" role="status"></p>
-            <ol id="mosque-list" class="mosque-list" hidden></ol>
-            <a id="mosque-maps-link" class="mosque-maps-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Cari masjid di Google Maps</a>
           </section>
         </div>
         <div class="privacy-card"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg><div><strong>Privasi terjaga</strong><p>Koordinat diproses di browser dan tidak disimpan. Hanya saat Anda menekan “Masjid Terdekat”, koordinat perkiraan dikirim ke OpenStreetMap.</p></div></div>
       </section>
 
+      <footer class="site-footer">
+        <p class="footer-copy">&copy; <span id="footer-year">2026</span> <strong>MetaForce</strong>. Hak cipta dilindungi.</p>
+      </footer>
+
+      <div id="murottal-bar" class="murottal-bar" role="region" aria-label="Pemutar murottal" hidden>
+        <div class="murottal-main">
+          <button id="murottal-prev" class="murottal-btn" type="button" aria-label="Ayat sebelumnya"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14M18 5.5v13L9.5 12 18 5.5Z" /></svg></button>
+          <button id="murottal-play" class="murottal-btn murottal-btn--play" type="button" aria-label="Putar murottal"><svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg><svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg><span class="murottal-spin" aria-hidden="true"></span></button>
+          <button id="murottal-next" class="murottal-btn" type="button" aria-label="Ayat berikutnya"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 5v14M6 5.5v13L14.5 12 6 5.5Z" /></svg></button>
+          <div class="murottal-info"><strong id="murottal-title">Murottal</strong><small id="murottal-sub" role="status">Ketuk ▶ untuk memulai</small></div>
+        </div>
+        <div class="murottal-opts">
+          <label class="murottal-select"><span class="sr-only">Pilih qari</span><select id="murottal-reciter"></select></label>
+          <button id="murottal-continuous" class="murottal-chip" type="button" aria-pressed="true">Berurutan</button>
+          <button id="murottal-follow" class="murottal-chip" type="button" aria-pressed="true">Ikuti layar</button>
+        </div>
+      </div>
+
       <nav id="bottom-nav" class="bottom-nav" aria-label="Navigasi utama">
         <button class="nav-item nav-item--active" type="button" data-go="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 10 8-7 8 7v10h-5v-6H9v6H4V10Z" /></svg><span>Beranda</span></button>
+        <button class="nav-item" type="button" data-go="prayer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 8v4.2l2.8 1.8" /></svg><span>Salat</span></button>
         <button class="nav-item" type="button" data-go="quran"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5c3.1-1.2 5.8-.7 8 1.5v12c-2.2-2.2-4.9-2.7-8-1.5v-12ZM20 5.5c-3.1-1.2-5.8-.7-8 1.5v12c2.2-2.2 4.9-2.7 8-1.5v-12Z" /></svg><span>Al-Qur’an</span></button>
         <button class="nav-item" type="button" data-go="short"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.4 5 5.6.8-4 3.9.9 5.5-4.9-2.6-4.9 2.6.9-5.5-4-3.9 5.6-.8L12 3Z" /></svg><span>Pendek</span></button>
         <button class="nav-item" type="button" data-go="tasbih"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="17.5" cy="7.5" r="2"/><circle cx="19" cy="13" r="2"/><circle cx="15.5" cy="17.5" r="2"/><circle cx="9.5" cy="18" r="2"/><circle cx="5.5" cy="14" r="2"/><circle cx="6.5" cy="8.5" r="2"/></svg><span>Tasbih</span></button>
@@ -247,6 +336,11 @@
       </nav>
     </main>
 
+    <div id="adhan-player" class="adhan-player" role="alert" hidden>
+      <span class="adhan-player-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 1 1 12 0c0 6 2 7.5 2 7.5H4S6 15 6 9ZM10 20a2 2 0 0 0 4 0" /></svg></span>
+      <div class="adhan-player-copy"><strong id="adhan-player-title">Adzan</strong><small id="adhan-player-sub"></small></div>
+      <button id="adhan-player-stop" class="adhan-player-stop" type="button">Hentikan</button>
+    </div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <div id="install-help" class="modal" hidden>
       <button class="modal-backdrop" type="button" data-close-modal aria-label="Tutup"></button>
@@ -256,7 +350,28 @@
         <button class="primary-button primary-button--wide" type="button" data-close-modal>Mengerti</button>
       </div>
     </div>
-    <noscript>Aplikasi ini membutuhkan JavaScript untuk berjalan.</noscript>
-    <script src="./app.js" defer></script>
+    <div id="mosque-sheet" class="modal mosque-modal" hidden>
+      <button class="modal-backdrop" type="button" data-close-mosque aria-label="Tutup"></button>
+      <div class="modal-sheet mosque-sheet" role="dialog" aria-modal="true" aria-labelledby="mosque-sheet-title">
+        <span class="modal-handle"></span>
+        <div class="mosque-sheet-head">
+          <h2 id="mosque-sheet-title">Masjid Terdekat</h2>
+          <button class="mosque-close" type="button" data-close-mosque aria-label="Tutup">&times;</button>
+        </div>
+        <div id="mosque-spinner" class="mosque-spinner" aria-hidden="true" hidden></div>
+        <p id="mosque-status" class="mosque-status" role="status"></p>
+        <ol id="mosque-list" class="mosque-list" hidden></ol>
+        <div class="mosque-actions">
+          <button id="mosque-retry" class="mosque-retry" type="button" hidden>Cari Ulang</button>
+          <a id="mosque-maps-link" class="mosque-maps-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Cari masjid di Google Maps</a>
+        </div>
+        <p class="mosque-attribution">Data masjid © kontributor OpenStreetMap. Kelengkapan bergantung pada pemetaan di daerah Anda.</p>
+      </div>
+    </div>
+   
+    <script src="./js/site-config.js?v=1.7.0" defer></script>
+    <script src="./js/cities.js?v=1.7.0" defer></script>
+    <script src="./js/prayer-times.js?v=1.7.0" defer></script>
+    <script src="./app.js?v=1.7.0" defer></script>
   </body>
 </html>

@@ -1,0 +1,7 @@
+# Files that must never be published with the website
+.git
+.gitignore
+README.md
+tools
+/*.png
+/*.zip
