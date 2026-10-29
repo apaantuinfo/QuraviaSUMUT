@@ -113,4 +113,5 @@ Teks Utsmani, transliterasi, dan terjemahan Indonesia berasal dari paket `quran-
 
 Data batas geofence disederhanakan dari batas provinsi Sumatera Utara yang bersumber dari peta administrasi Indonesia. Geofence ditujukan untuk pembatasan fitur aplikasi, bukan penetapan batas hukum.
 #   Q u r a v i a S U M U T  
+ #   Q u r a v i a S U M U T  
  
