@@ -21,6 +21,16 @@
     },
   };
 
+  // New feature modules must never be able to take down navigation or the Qur'an reader.
+  function safely(label, task) {
+    try {
+      return task();
+    } catch (error) {
+      console.error(`[Quravia] ${label} gagal dijalankan`, error);
+      return undefined;
+    }
+  }
+
   const state = {
     surahs: [],
     filter: "all",
@@ -33,6 +43,8 @@
     qiblaBearing: null,
     position: null,
     mosqueBusy: false,
+    mosqueRun: 0,
+    mosqueCache: null,
     toastTimer: null,
     arabicSize: storage.get("QuraviaArabicSize", 32),
     bookmarks: storage.get("QuraviaBookmarks", []),
@@ -46,6 +58,7 @@
   const screenMeta = {
     home: ["ASSALAMU’ALAIKUM", "Quravia"],
     quran: ["BACA & RENUNGKAN", "Al-Qur’an"],
+    prayer: ["SUMATERA UTARA", "Jadwal Salat"],
     short: ["JUZ AMMA", "Surat Pendek"],
     tasbih: ["DZIKIR HARIAN", "Tasbih Digital"],
     qibla: ["SUMATERA UTARA", "Kompas Kiblat"],
@@ -110,7 +123,24 @@
     });
 
     if (screen === "home" && state.surahs.length) updateContinueCard();
-    syncCompass();
+    safely("murottal", () => {
+      if (screen !== "reader") {
+        stopMurottal();
+        $("#murottal-bar").hidden = true;
+      }
+    });
+    safely("jadwal salat", () => {
+      if (screen === "prayer") {
+        prayer.dayOffset = 0;
+        renderPrayerScreen();
+      }
+      updateCountdowns();
+    });
+    safely("kompas", syncCompass);
+    safely("footer", () => {
+      $(".site-footer").classList.toggle("site-footer--reader", screen === "reader");
+      document.body.classList.toggle("in-reader", screen === "reader");
+    });
     if (!options.keepScroll) window.scrollTo({ top: 0, behavior: "instant" });
   }
 
@@ -192,11 +222,21 @@
       <article class="verse-card" data-verse="${verse.id}">
         <div class="verse-topline">
           <span class="verse-index">${verse.id}</span>
+          <div class="verse-actions">
+          <button class="verse-play" type="button" data-play="${verse.id}" aria-label="Putar ayat ${verse.id}">
+            <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg>
+            <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg>
+            <span class="murottal-spin" aria-hidden="true"></span>
+          </button>
           <button class="bookmark-button${bookmarked ? " bookmark-button--active" : ""}" type="button" data-bookmark="${key}" aria-label="${bookmarked ? "Hapus" : "Simpan"} penanda ayat ${verse.id}">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v16l-5-3-5 3V4Z" /></svg>
           </button>
+          <button class="bookmark-button share-button" type="button" data-share="${verse.id}" aria-label="Bagikan ayat ${verse.id} sebagai gambar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M8 8l4-4 4 4M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" /></svg>
+          </button>
+          </div>
         </div>
-        <p class="verse-arabic" lang="ar" dir="rtl">${escapeHTML(verse.text)}</p>
+        <p class="verse-arabic" lang="ar" dir="rtl">${arabicHTML(verse.text)}</p>
         <p class="verse-latin">${escapeHTML(verse.transliteration)}</p>
         <p class="verse-translation">${verse.id}. ${escapeHTML(verse.translation)}</p>
       </article>`;
@@ -226,6 +266,8 @@
     if (!summary) return;
 
     navigate("reader");
+    stopMurottal();
+    $("#murottal-bar").hidden = true;
     $("#reader-loading").innerHTML = `<div class="spinner"></div><p>Menyiapkan surah…</p>`;
     $("#reader-loading").hidden = false;
     $("#reader-content").hidden = true;
@@ -249,6 +291,7 @@
       $("#reader-content").hidden = false;
       storage.set("QuraviaLastRead", { surah: surah.id, ayah: 1 });
       observeReaderProgress(surah);
+      prepareMurottal(surah);
     } catch {
       $("#reader-loading").innerHTML = `<p>Surah belum dapat dimuat. Periksa koneksi lalu coba lagi.</p><button class="secondary-button" type="button" id="reader-retry">Coba Lagi</button>`;
       $("#reader-retry")?.addEventListener("click", () => {
@@ -390,7 +433,7 @@
           return;
         }
 
-        state.position = { latitude, longitude, accuracy };
+        state.position = { latitude, longitude, accuracy, at: Date.now() };
         state.qiblaBearing = calculateQiblaBearing(latitude, longitude);
         $("#qibla-bearing").textContent = String(Math.round(state.qiblaBearing));
         $("#approved-coordinates").textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)} • akurasi ±${Math.round(accuracy)} m`;
@@ -579,12 +622,21 @@
   // ---------------------------------------------------------------------------
   // Nearest mosque: browser Geolocation (free) + OpenStreetMap Overpass (free, no key)
   // ---------------------------------------------------------------------------
+  // Public Overpass servers are shared and often slow or rate-limited (HTTP 429),
+  // so several are raced (staggered, so the happy path only hits the first one)
+  // and Nominatim is used as a last-resort fallback.
   const OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
   ];
-  const MOSQUE_RADII = [2000, 6000, 15000];
-  const MAX_MOSQUES_SHOWN = 6;
+  const OVERPASS_STAGGER_MS = 1200;
+  const OVERPASS_TIMEOUT_MS = 14000;
+  const MOSQUE_RADII = [5000, 15000];
+  const MAX_MOSQUES_SHOWN = 8;
+  const MOSQUE_CACHE_MS = 10 * 60 * 1000;
+  const FRESH_POSITION_MS = 5 * 60 * 1000;
 
   function haversineMeters(lat1, lon1, lat2, lon2) {
     const toRad = (d) => (d * Math.PI) / 180;
@@ -614,18 +666,21 @@
         return;
       }
       navigator.geolocation.getCurrentPosition(
-        ({ coords }) => resolve({ latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy }),
+        ({ coords }) =>
+          resolve({ latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy, at: Date.now() }),
         reject,
-        { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 120000 },
       );
     });
   }
 
-  async function fetchOverpass(query) {
-    let lastError;
-    for (const endpoint of OVERPASS_ENDPOINTS) {
+  function raceOverpass(query) {
+    const controllers = [];
+    const attempts = OVERPASS_ENDPOINTS.map(async (endpoint, index) => {
+      if (index > 0) await new Promise((resolve) => setTimeout(resolve, index * OVERPASS_STAGGER_MS));
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
+      controllers.push(controller);
+      const timer = setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS);
       try {
         const response = await fetch(endpoint, {
           method: "POST",
@@ -634,47 +689,31 @@
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        return Array.isArray(data.elements) ? data.elements : [];
-      } catch (error) {
-        lastError = error;
+        if (!Array.isArray(data.elements)) throw new Error("bad-response");
+        return data.elements;
       } finally {
         clearTimeout(timer);
       }
-    }
-    throw lastError || new Error("overpass-failed");
+    });
+    return Promise.any(attempts).finally(() => controllers.forEach((controller) => controller.abort()));
   }
 
-  async function searchMosques(position, radius) {
-    // Coordinates are rounded to 3 decimals (~100 m) before leaving the device.
-    const lat = Number(position.latitude.toFixed(3));
-    const lon = Number(position.longitude.toFixed(3));
-    const query =
-      `[out:json][timeout:20];(` +
-      `nwr["amenity"="place_of_worship"]["religion"="muslim"](around:${radius},${lat},${lon});` +
-      `nwr["building"="mosque"](around:${radius},${lat},${lon});` +
-      `);out center tags;`;
-    const elements = await fetchOverpass(query);
+  function toMosque(position, latitude, longitude, tags) {
+    const name = String(tags.name || tags["name:id"] || tags["name:en"] || "").trim();
+    const kind = /musala|mushal|musholla|mushola|surau|langgar/i.test(name) ? "Musala" : "Masjid";
+    const address = [tags["addr:street"], tags["addr:suburb"] || tags["addr:city"]].filter(Boolean).join(", ");
+    return {
+      name: name || "Masjid (nama belum tercatat)",
+      hasName: Boolean(name),
+      kind,
+      address,
+      latitude,
+      longitude,
+      distance: haversineMeters(position.latitude, position.longitude, latitude, longitude),
+    };
+  }
 
-    const found = [];
-    for (const element of elements) {
-      const latitude = element.lat ?? element.center?.lat;
-      const longitude = element.lon ?? element.center?.lon;
-      if (typeof latitude !== "number" || typeof longitude !== "number") continue;
-      const tags = element.tags || {};
-      const name = (tags.name || tags["name:id"] || tags["name:en"] || "").trim();
-      const kind = /musala|mushal|musholla|mushola|surau|langgar/i.test(name) ? "Musala" : "Masjid";
-      const address = [tags["addr:street"], tags["addr:suburb"] || tags["addr:city"]].filter(Boolean).join(", ");
-      found.push({
-        name: name || "Masjid (nama belum tercatat)",
-        hasName: Boolean(name),
-        kind,
-        address,
-        latitude,
-        longitude,
-        distance: haversineMeters(position.latitude, position.longitude, latitude, longitude),
-      });
-    }
-
+  function sortAndDedupe(found) {
     found.sort((a, b) => a.distance - b.distance);
     // OpenStreetMap sometimes maps one mosque twice (building + point); drop near-duplicates.
     const unique = [];
@@ -689,10 +728,59 @@
     return unique;
   }
 
-  function renderMosques(mosques, radius) {
-    const list = $("#mosque-list");
-    list.innerHTML = mosques
-      .slice(0, MAX_MOSQUES_SHOWN)
+  async function searchMosquesOverpass(position, radius) {
+    // Coordinates are rounded to 3 decimals (~100 m) before leaving the device.
+    const lat = Number(position.latitude.toFixed(3));
+    const lon = Number(position.longitude.toFixed(3));
+    const query =
+      `[out:json][timeout:25];(` +
+      `nwr["amenity"="place_of_worship"]["religion"="muslim"](around:${radius},${lat},${lon});` +
+      `nwr["building"="mosque"](around:${radius},${lat},${lon});` +
+      `);out center tags;`;
+    const elements = await raceOverpass(query);
+    const found = [];
+    for (const element of elements) {
+      const latitude = element.lat ?? element.center?.lat;
+      const longitude = element.lon ?? element.center?.lon;
+      if (typeof latitude !== "number" || typeof longitude !== "number") continue;
+      found.push(toMosque(position, latitude, longitude, element.tags || {}));
+    }
+    return sortAndDedupe(found);
+  }
+
+  // Fallback when every Overpass server fails: Nominatim (free, CORS-enabled).
+  async function searchMosquesNominatim(position) {
+    const lat = Number(position.latitude.toFixed(3));
+    const lon = Number(position.longitude.toFixed(3));
+    const delta = 0.09; // roughly 10 km each way
+    const url =
+      "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=40&bounded=1&accept-language=id&q=masjid" +
+      `&viewbox=${lon - delta},${lat + delta},${lon + delta},${lat - delta}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const rows = await response.json();
+      const found = [];
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const isMosque =
+          (row.category === "amenity" && row.type === "place_of_worship") ||
+          (row.category === "building" && row.type === "mosque");
+        const latitude = Number(row.lat);
+        const longitude = Number(row.lon);
+        if (!isMosque || !Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+        found.push(toMosque(position, latitude, longitude, { name: row.name || "" }));
+      }
+      return sortAndDedupe(found);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function renderMosques(mosques) {
+    const shown = mosques.slice(0, MAX_MOSQUES_SHOWN);
+    $("#mosque-list").innerHTML = shown
       .map(
         (mosque, index) => `
           <li class="mosque-item">
@@ -705,69 +793,1337 @@
           </li>`,
       )
       .join("");
-    list.hidden = false;
-    $("#mosque-status").textContent = `${Math.min(mosques.length, MAX_MOSQUES_SHOWN)} masjid terdekat dalam radius ${radius / 1000} km.`;
+    $("#mosque-list").hidden = false;
+    return shown.length;
   }
 
-  async function findNearestMosque() {
-    if (state.mosqueBusy) return;
-    state.mosqueBusy = true;
+  function openMosqueSheet() {
+    $("#mosque-sheet").hidden = false;
+    document.body.style.overflow = "hidden";
+  }
 
-    const button = $("#find-mosque");
-    const status = $("#mosque-status");
-    const list = $("#mosque-list");
-    const mapsLink = $("#mosque-maps-link");
-    list.hidden = true;
-    list.innerHTML = "";
-    mapsLink.hidden = true;
-    status.textContent = "Menentukan lokasi GPS Anda…";
-    setButtonLoading(button, true, "Mencari masjid…");
+  function closeMosqueSheet() {
+    $("#mosque-sheet").hidden = true;
+    document.body.style.overflow = "";
+    state.mosqueRun += 1; // ignore results of a search the user walked away from
+    state.mosqueBusy = false;
+  }
+
+  function setMosqueUI({ loading = false, status = "", retry = false, mapsLink = null } = {}) {
+    $("#mosque-spinner").hidden = !loading;
+    $("#mosque-status").textContent = status;
+    $("#mosque-retry").hidden = !retry;
+    const link = $("#mosque-maps-link");
+    if (mapsLink) link.href = mapsLink;
+    link.hidden = !mapsLink;
+  }
+
+  async function findNearestMosque(force = false) {
+    if (state.mosqueBusy) {
+      openMosqueSheet();
+      return;
+    }
+    state.mosqueBusy = true;
+    const run = ++state.mosqueRun;
+    const stale = () => run !== state.mosqueRun;
+
+    // Open the sheet immediately so the tap always gives visible feedback.
+    $("#mosque-list").hidden = true;
+    $("#mosque-list").innerHTML = "";
+    setMosqueUI({ loading: true, status: "Menentukan lokasi GPS Anda…" });
+    openMosqueSheet();
 
     let position = null;
     try {
-      try {
-        position = await getFreshPosition();
-        state.position = position;
-      } catch (error) {
-        if (!state.position) {
-          status.textContent = locationErrorMessage(error.code ? error : { code: 0, PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
-          return;
+      // The compass check just produced a fix; reuse it if it is recent, else ask GPS again.
+      if (state.position && Date.now() - (state.position.at || 0) < FRESH_POSITION_MS) {
+        position = state.position;
+      } else {
+        try {
+          position = await getFreshPosition();
+          state.position = position;
+        } catch (error) {
+          if (!state.position) {
+            if (stale()) return;
+            setMosqueUI({ status: locationErrorMessage(error && error.code ? error : { code: 0 }), retry: true });
+            return;
+          }
+          position = state.position; // fall back to the fix that unlocked the compass
         }
-        position = state.position; // fall back to the position that unlocked the compass
       }
+      if (stale()) return;
 
-      mapsLink.href = mapsSearchUrl(position.latitude, position.longitude);
+      const mapsLink = mapsSearchUrl(position.latitude, position.longitude);
 
-      if (navigator.onLine === false) {
-        status.textContent = "Tidak ada koneksi internet. Pencarian masjid membutuhkan internet.";
-        mapsLink.hidden = false;
+      const cache = state.mosqueCache;
+      const cacheKey = `${position.latitude.toFixed(3)},${position.longitude.toFixed(3)}`;
+      if (!force && cache && cache.key === cacheKey && Date.now() - cache.at < MOSQUE_CACHE_MS) {
+        const count = renderMosques(cache.mosques);
+        setMosqueUI({ status: `${count} masjid terdekat dalam radius ${cache.radius / 1000} km.`, retry: true, mapsLink });
         return;
       }
 
-      status.textContent = "Mencari masjid di sekitar Anda…";
+      if (navigator.onLine === false) {
+        setMosqueUI({ status: "Tidak ada koneksi internet. Pencarian masjid membutuhkan internet.", retry: true, mapsLink });
+        return;
+      }
+
+      setMosqueUI({ loading: true, status: "Mencari masjid di sekitar Anda…" });
+
       let mosques = [];
       let usedRadius = MOSQUE_RADII[0];
-      for (const radius of MOSQUE_RADII) {
-        usedRadius = radius;
-        mosques = await searchMosques(position, radius);
-        if (mosques.length >= 3) break;
+      let overpassFailed = false;
+      try {
+        for (const radius of MOSQUE_RADII) {
+          usedRadius = radius;
+          mosques = await searchMosquesOverpass(position, radius);
+          if (stale()) return;
+          if (mosques.length) break;
+        }
+      } catch {
+        overpassFailed = true;
+      }
+      if (stale()) return;
+
+      if (overpassFailed) {
+        setMosqueUI({ loading: true, status: "Server peta utama sibuk, mencoba sumber cadangan…" });
+        try {
+          mosques = await searchMosquesNominatim(position);
+          usedRadius = 10000;
+          overpassFailed = false;
+        } catch {
+          /* handled below */
+        }
+        if (stale()) return;
+      }
+
+      if (overpassFailed) {
+        setMosqueUI({
+          status: "Layanan peta sedang sibuk atau tidak terjangkau dari jaringan Anda. Coba lagi, atau buka pencarian di Google Maps.",
+          retry: true,
+          mapsLink,
+        });
+        return;
       }
 
       if (!mosques.length) {
-        status.textContent = `Belum ada data masjid di OpenStreetMap dalam radius ${usedRadius / 1000} km. Coba cari lewat Google Maps.`;
-        mapsLink.hidden = false;
+        setMosqueUI({
+          status: `Belum ada data masjid di OpenStreetMap dalam radius ${usedRadius / 1000} km. Coba cari lewat Google Maps.`,
+          retry: true,
+          mapsLink,
+        });
         return;
       }
 
-      renderMosques(mosques, usedRadius);
-      mapsLink.hidden = false;
-    } catch {
-      status.textContent = "Layanan peta sedang sibuk atau tidak terjangkau. Coba lagi sebentar lagi, atau cari lewat Google Maps.";
-      if (position) mapsLink.hidden = false;
+      state.mosqueCache = { key: cacheKey, mosques, radius: usedRadius, at: Date.now() };
+      const count = renderMosques(mosques);
+      setMosqueUI({ status: `${count} masjid terdekat dalam radius ${usedRadius / 1000} km.`, retry: true, mapsLink });
+      $("#mosque-sheet .mosque-sheet").scrollTop = 0;
     } finally {
-      setButtonLoading(button, false);
-      state.mosqueBusy = false;
+      if (!stale()) state.mosqueBusy = false;
     }
+  }
+
+  // ===========================================================================
+  // Prayer times + adhan
+  // ===========================================================================
+  const PRAYER_LABELS = { imsak: "Imsak", fajr: "Subuh", sunrise: "Terbit", dhuhr: "Dzuhur", asr: "Ashar", maghrib: "Maghrib", isha: "Isya" };
+  const FARD = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
+  const ROW_ORDER = ["imsak", "fajr", "sunrise", "dhuhr", "asr", "maghrib", "isha"];
+  const WIB_OFFSET_MS = 7 * 3600e3;
+  const ADHAN_WINDOW_MS = 90 * 1000;
+  const BELL_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 1 1 12 0c0 6 2 7.5 2 7.5H4S6 15 6 9ZM10 20a2 2 0 0 0 4 0" /></svg>';
+
+  const prayer = {
+    city: null,
+    dayOffset: 0,
+    cache: new Map(),
+    adhan: { master: false, perPrayer: { fajr: true, dhuhr: true, asr: true, maghrib: true, isha: true } },
+    wake: false,
+    primed: false,
+    armedAt: Date.now(),
+    lastFired: storage.get("QuraviaLastAdhan", ""),
+    lastNextKey: "",
+    todayKey: "",
+    hiddenAt: 0,
+    mode: null, // "auto" (follow my location) | "manual" | null (not chosen yet)
+    lastLocateAt: 0,
+    locating: false,
+    sentinel: null,
+    current: null, // { key, variant, audio, test, blocked }
+  };
+
+  const adhanAudio = {
+    fajr: new Audio("./assets/audio/adzan-subuh.mp3"),
+    regular: new Audio("./assets/audio/adzan-makkah.mp3"),
+  };
+
+  const dateFormatter = new Intl.DateTimeFormat("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+
+  function wibParts(ms) {
+    const d = new Date(ms + WIB_OFFSET_MS);
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), dow: d.getUTCDay() };
+  }
+
+  function addDays(date, days) {
+    const t = new Date(Date.UTC(date.y, date.m - 1, date.d + days));
+    return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate(), dow: t.getUTCDay() };
+  }
+
+  function formatDate(date) {
+    return dateFormatter.format(new Date(Date.UTC(date.y, date.m - 1, date.d)));
+  }
+
+  function timesFor(date, city = prayer.city) {
+    const key = `${city.id}|${date.y}-${date.m}-${date.d}`;
+    let times = prayer.cache.get(key);
+    if (!times) {
+      times = PrayerTimes.calculate(date.y, date.m, date.d, city);
+      if (prayer.cache.size > 60) prayer.cache.clear();
+      prayer.cache.set(key, times);
+    }
+    return times;
+  }
+
+  const clock = (ms) => PrayerTimes.formatTime(ms, 7);
+  const wibDayKey = (ms) => {
+    const parts = wibParts(ms);
+    return `${parts.y}-${parts.m}-${parts.d}`;
+  };
+  const clockWithSeconds = (ms) => {
+    const d = new Date(ms + WIB_OFFSET_MS);
+    return [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
+  };
+
+  function prayerDisplayName(key, date) {
+    return key === "dhuhr" && date.dow === 5 ? "Jumat" : PRAYER_LABELS[key];
+  }
+
+  function nextPrayer(now = Date.now()) {
+    const today = wibParts(now);
+    for (let offset = 0; offset <= 1; offset += 1) {
+      const date = addDays(today, offset);
+      const times = timesFor(date);
+      for (const key of FARD) {
+        if (times[key] !== null && times[key] > now) return { key, at: times[key], date };
+      }
+    }
+    return null;
+  }
+
+  function formatCountdown(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  function renderPrayerScreen() {
+    const now = Date.now();
+    const today = wibParts(now);
+    const date = addDays(today, prayer.dayOffset);
+    const times = timesFor(date);
+    const isToday = prayer.dayOffset === 0;
+    const upcoming = nextPrayer(now);
+    const nextKey = isToday && upcoming && upcoming.date.d === date.d ? upcoming.key : "";
+    // The prayer whose time has begun and not yet ended (latest fard that has already started today).
+    const currentKey = isToday ? [...FARD].reverse().find((key) => times[key] !== null && times[key] <= now) || "" : "";
+
+    $("#prayer-day-title").textContent = formatDate(date);
+    $("#prayer-today").hidden = isToday;
+
+    $("#prayer-list").innerHTML = ROW_ORDER.map((key) => {
+      const isFard = FARD.includes(key);
+      const name = prayerDisplayName(key, date);
+      const classes = ["prayer-row"];
+      if (!isFard) classes.push("prayer-row--minor");
+      if (isToday && times[key] !== null && times[key] <= now && key !== nextKey) classes.push("prayer-row--passed");
+      if (key === nextKey) classes.push("prayer-row--next");
+      if (key === currentKey) classes.push("prayer-row--current");
+      const sub =
+        (key === "dhuhr" && date.dow === 5 ? "<small>SALAT JUMAT • masuk waktu Dzuhur</small>" : "") +
+        (key === currentKey ? '<small class="prayer-now-badge">● SEDANG BERLANGSUNG</small>' : "");
+      const on = prayer.adhan.perPrayer[key] !== false;
+      const bell = isFard
+        ? `<button class="adhan-bell" type="button" data-adhan-toggle="${key}" aria-pressed="${on}" aria-label="Adzan ${name} ${on ? "aktif" : "nonaktif"}">${BELL_SVG}</button>`
+        : '<span aria-hidden="true"></span>';
+      return `<li class="${classes.join(" ")}" data-prayer="${key}"${key === currentKey ? ' aria-current="time"' : ""}><span class="prayer-row-name">${name}${sub}</span><span class="prayer-row-time">${clock(times[key])}</span>${bell}</li>`;
+    }).join("");
+
+    const banner = $("#jumat-banner");
+    banner.hidden = date.dow !== 5;
+    if (date.dow === 5) {
+      $("#jumat-title").textContent = "Hari Jumat • Salat Jumat";
+      $("#jumat-text").textContent = `Salat Jumat dimulai saat masuk waktu Dzuhur, sekitar pukul ${clock(times.dhuhr)} WIB di ${prayer.city.name}. Jam pelaksanaan di masjid setempat dapat berbeda; ikuti pengumuman takmir.`;
+    }
+
+    const jumatNext = $("#jumat-next");
+    if (date.dow === 5) {
+      jumatNext.hidden = true;
+    } else {
+      const ahead = addDays(date, (5 - date.dow + 7) % 7 || 7);
+      jumatNext.textContent = `Salat Jumat berikutnya: ${formatDate(ahead)} • sekitar ${clock(timesFor(ahead).dhuhr)} WIB (masuk waktu Dzuhur).`;
+      jumatNext.hidden = false;
+    }
+
+    prayer.lastNextKey = upcoming ? `${upcoming.date.d}:${upcoming.key}` : "";
+    updateCountdowns();
+    syncAdhanUI();
+  }
+
+  function updateCountdowns() {
+    if (!prayer.city) return;
+    const next = nextPrayer();
+    if (!next) return;
+    const name = prayerDisplayName(next.key, next.date);
+    const countdown = formatCountdown(next.at - Date.now());
+    const sameDay = next.date.d === wibParts(Date.now()).d;
+
+    if (state.currentScreen === "prayer") {
+      $("#prayer-now").textContent = `Sekarang ${clockWithSeconds(Date.now())} WIB`;
+      $("#prayer-next-name").textContent = next.key === "dhuhr" && next.date.dow === 5 ? "Salat Jumat" : name;
+      $("#prayer-next-time").textContent = clock(next.at);
+      $("#prayer-countdown").textContent = `− ${countdown}`;
+      $("#prayer-hero-label").textContent = sameDay ? "Waktu salat berikutnya" : "Besok, waktu salat berikutnya";
+    }
+    if (state.currentScreen === "home") {
+      $("#home-prayer-name").textContent = `${next.key === "dhuhr" && next.date.dow === 5 ? "Salat Jumat" : name} • ${prayer.city.name.replace(/^(Kota|Kab\.) /, "")}`;
+      $("#home-prayer-time").textContent = clock(next.at);
+      $("#home-prayer-countdown").textContent = `− ${countdown}`;
+      $("#home-prayer-label").textContent = sameDay ? "Waktu salat berikutnya" : "Besok";
+    }
+  }
+
+  // ---- adhan playback ----
+  function primeAdhanAudio() {
+    if (prayer.primed) return;
+    prayer.primed = true;
+    for (const audio of Object.values(adhanAudio)) {
+      audio.preload = "auto";
+      audio.muted = true;
+      const attempt = audio.play();
+      if (attempt && attempt.then) {
+        attempt
+          .then(() => {
+            audio.pause();
+            audio.currentTime = 0;
+            audio.muted = false;
+            syncAdhanUI();
+          })
+          .catch(() => {
+            audio.muted = false;
+            prayer.primed = false;
+          });
+      }
+    }
+  }
+
+  function syncAdhanUI() {
+    const master = prayer.adhan.master;
+    $("#adhan-master").setAttribute("aria-checked", String(master));
+    $("#adhan-status").textContent = master
+      ? "Aktif • berbunyi saat waktu salat tiba (biarkan aplikasi terbuka)"
+      : "Nonaktif • tidak ada suara adzan otomatis";
+    $$("[data-adhan-toggle]").forEach((button) => {
+      const key = button.dataset.adhanToggle;
+      const on = prayer.adhan.perPrayer[key] !== false;
+      button.setAttribute("aria-pressed", String(on));
+      button.setAttribute("aria-label", `Adzan ${PRAYER_LABELS[key]} ${on ? "aktif" : "nonaktif"}`);
+    });
+    const current = prayer.current;
+    $("#adhan-test-fajr").classList.toggle("adhan-test--playing", Boolean(current && current.test && current.variant === "fajr"));
+    $("#adhan-test-regular").classList.toggle("adhan-test--playing", Boolean(current && current.test && current.variant === "regular"));
+    $("#wake-switch").setAttribute("aria-checked", String(prayer.wake));
+  }
+
+  function showAdhanPlayer({ title, sub, blocked }) {
+    $("#adhan-player").hidden = false;
+    $("#adhan-player-title").textContent = title;
+    $("#adhan-player-sub").textContent = sub;
+    $("#adhan-player-stop").textContent = blocked ? "Putar" : "Hentikan";
+  }
+
+  function stopAdhan() {
+    const current = prayer.current;
+    prayer.current = null;
+    if (current) {
+      current.audio.pause();
+      current.audio.currentTime = 0;
+    }
+    $("#adhan-player").hidden = true;
+    syncAdhanUI();
+  }
+
+  async function playAdhan(key, options = {}) {
+    const variant = key === "fajr" ? "fajr" : "regular";
+    const audio = adhanAudio[variant];
+    stopAdhan();
+    pauseMurottal();
+
+    audio.preload = "auto";
+    audio.muted = false;
+    audio.volume = 1;
+    audio.currentTime = 0;
+    const today = wibParts(Date.now());
+    const label = options.test
+      ? `Contoh adzan ${variant === "fajr" ? "Subuh" : "Dzuhur–Isya"}`
+      : `Adzan ${prayerDisplayName(key, today)}`;
+    const sub = options.test ? "Pratinjau suara" : `${prayer.city.name} • ${clock(timesFor(today)[key])} WIB`;
+    prayer.current = { key, variant, audio, test: Boolean(options.test), blocked: false, label, sub };
+
+    try {
+      await audio.play();
+      showAdhanPlayer({ title: label, sub, blocked: false });
+    } catch {
+      // Autoplay was refused by the browser: ask for one tap.
+      if (prayer.current) prayer.current.blocked = true;
+      showAdhanPlayer({ title: `${label} — ketuk untuk memutar`, sub: "Browser menahan suara otomatis", blocked: true });
+    }
+    syncAdhanUI();
+  }
+
+  function checkAdhan() {
+    if (!prayer.adhan.master || prayer.current) return;
+    const now = Date.now();
+    const date = wibParts(now);
+    const times = timesFor(date);
+    for (const key of FARD) {
+      if (prayer.adhan.perPrayer[key] === false) continue;
+      const at = times[key];
+      if (at === null || now < at || now - at > ADHAN_WINDOW_MS) continue;
+      if (at < prayer.armedAt - 1000) continue; // do not announce a prayer that began before the app was opened/armed
+      const id = `${date.y}-${date.m}-${date.d}:${key}`;
+      if (prayer.lastFired === id) continue;
+      prayer.lastFired = id;
+      storage.set("QuraviaLastAdhan", id);
+      playAdhan(key);
+      return;
+    }
+  }
+
+  function prayerTick() {
+    if (!prayer.city) return;
+    const dayKey = wibDayKey(Date.now());
+    const dayChanged = dayKey !== prayer.todayKey;
+    if (dayChanged) {
+      // Midnight passed (or the app woke up on a later day): always return to "today".
+      prayer.todayKey = dayKey;
+      prayer.dayOffset = 0;
+    }
+    updateCountdowns();
+    checkAdhan();
+    if (state.currentScreen === "prayer") {
+      const next = nextPrayer();
+      const marker = next ? `${next.date.d}:${next.key}` : "";
+      if (dayChanged || (marker !== prayer.lastNextKey && prayer.dayOffset === 0)) renderPrayerScreen();
+    }
+  }
+
+  // Called whenever the app comes back to the foreground.
+  function refreshPrayerOnResume() {
+    if (!prayer.city) return;
+    const away = prayer.hiddenAt ? Date.now() - prayer.hiddenAt : 0;
+    prayer.hiddenAt = 0;
+    if (away > 5 * 60 * 1000) prayer.dayOffset = 0; // coming back after a while: show today, not a browsed day
+    prayer.todayKey = ""; // force prayerTick() to treat this as a fresh day check
+    prayerTick();
+    if (state.currentScreen === "prayer") renderPrayerScreen();
+    maybeFollowLocation();
+  }
+
+  async function applyWakeLock() {
+    if (!prayer.wake || document.hidden || !("wakeLock" in navigator) || prayer.sentinel) return;
+    try {
+      prayer.sentinel = await navigator.wakeLock.request("screen");
+      prayer.sentinel.addEventListener("release", () => {
+        prayer.sentinel = null;
+      });
+    } catch {
+      prayer.sentinel = null;
+    }
+  }
+
+  function releaseWakeLock() {
+    if (prayer.sentinel) prayer.sentinel.release().catch(() => {});
+    prayer.sentinel = null;
+  }
+
+  function populateCities() {
+    $("#prayer-city").innerHTML = SumutCities.cities
+      .map((city) => `<option value="${city.id}">${escapeHTML(city.name)}</option>`)
+      .join("");
+    $("#prayer-city").value = prayer.city.id;
+  }
+
+  function getCoarsePosition() {
+    return new Promise((resolve, reject) => {
+      if (!window.isSecureContext || !navigator.geolocation) {
+        reject({ code: 0 });
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        ({ coords }) => resolve({ latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy, at: Date.now() }),
+        reject,
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 0 }, // refreshes are already limited to once per 15 minutes
+      );
+    });
+  }
+
+  function describeLocation(city, distanceKm) {
+    return `Mengikuti lokasi Anda: ${city.name} (±${Math.round(distanceKm)} km dari pusat kota). Lokasi tidak dikirim ke mana pun. Pilih kota di atas untuk mengunci manual.`;
+  }
+
+  // Applies the city nearest to a position; returns true when it is inside Sumatera Utara.
+  function applyPositionToPrayer(position, announce) {
+    state.position = position;
+    prayer.lastLocateAt = Date.now();
+    if (!isInNorthSumatra(position.latitude, position.longitude)) {
+      if (announce) $("#prayer-location-note").textContent = "Lokasi Anda di luar Sumatera Utara. Pilih kabupaten/kota secara manual.";
+      return false;
+    }
+    const { city, distanceKm } = SumutCities.nearest(position.latitude, position.longitude);
+    if (city.id !== prayer.city.id) setPrayerCity(city.id);
+    $("#prayer-location-note").textContent = describeLocation(city, distanceKm);
+    return true;
+  }
+
+  async function useMyLocationForPrayer() {
+    const button = $("#prayer-gps");
+    const note = $("#prayer-location-note");
+    button.disabled = true;
+    note.textContent = "Menentukan lokasi…";
+    try {
+      const position = await getFreshPosition();
+      if (applyPositionToPrayer(position, true)) {
+        prayer.mode = "auto";
+        storage.set("QuraviaCityMode", "auto");
+      }
+    } catch (error) {
+      note.textContent = locationErrorMessage(error && error.code ? error : { code: 0 });
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  // Silent refresh when the app opens/resumes: only if the user did not lock a city manually
+  // and location access is already granted (so no new permission prompt appears on open).
+  async function maybeFollowLocation() {
+    if (prayer.mode === "manual" || prayer.locating || !navigator.geolocation) return;
+    if (Date.now() - prayer.lastLocateAt < 15 * 60 * 1000) return;
+    prayer.locating = true;
+    try {
+      let allowed = prayer.mode === "auto";
+      if (navigator.permissions && navigator.permissions.query) {
+        try {
+          const status = await navigator.permissions.query({ name: "geolocation" });
+          allowed = status.state === "granted";
+        } catch {
+          /* keep the previous value */
+        }
+      }
+      if (!allowed) return;
+      applyPositionToPrayer(await getCoarsePosition(), false);
+    } catch {
+      /* location unavailable: keep the current city */
+    } finally {
+      prayer.locating = false;
+    }
+  }
+
+  function setPrayerCity(id) {
+    prayer.city = SumutCities.byId(id);
+    storage.set("QuraviaCity", prayer.city.id);
+    $("#prayer-city").value = prayer.city.id;
+    prayer.dayOffset = 0;
+    renderPrayerScreen();
+  }
+
+  function bindPrayerEvents() {
+    $("#prayer-city").addEventListener("change", (event) => {
+      prayer.mode = "manual";
+      storage.set("QuraviaCityMode", "manual");
+      $("#prayer-location-note").textContent = "Kota dikunci manual. Ketuk ikon target untuk kembali mengikuti lokasi Anda.";
+      setPrayerCity(event.target.value);
+    });
+    $("#prayer-gps").addEventListener("click", useMyLocationForPrayer);
+    $("#prayer-prev-day").addEventListener("click", () => {
+      prayer.dayOffset -= 1;
+      renderPrayerScreen();
+    });
+    $("#prayer-next-day").addEventListener("click", () => {
+      prayer.dayOffset += 1;
+      renderPrayerScreen();
+    });
+    $("#prayer-today").addEventListener("click", () => {
+      prayer.dayOffset = 0;
+      renderPrayerScreen();
+    });
+
+    $("#prayer-list").addEventListener("click", (event) => {
+      const bell = event.target.closest("[data-adhan-toggle]");
+      if (!bell) return;
+      const key = bell.dataset.adhanToggle;
+      prayer.adhan.perPrayer[key] = prayer.adhan.perPrayer[key] === false;
+      storage.set("QuraviaAdhan", prayer.adhan);
+      syncAdhanUI();
+      showToast(`Adzan ${PRAYER_LABELS[key]} ${prayer.adhan.perPrayer[key] ? "diaktifkan" : "dimatikan"}.`);
+    });
+
+    $("#adhan-master").addEventListener("click", () => {
+      prayer.adhan.master = !prayer.adhan.master;
+      storage.set("QuraviaAdhan", prayer.adhan);
+      if (prayer.adhan.master) {
+        prayer.armedAt = Date.now();
+        primeAdhanAudio();
+        showToast("Adzan otomatis aktif. Biarkan Quravia terbuka agar adzan berbunyi.");
+      } else {
+        stopAdhan();
+        showToast("Adzan otomatis dimatikan.");
+      }
+      syncAdhanUI();
+    });
+
+    const testButton = (selector, key) =>
+      $(selector).addEventListener("click", () => {
+        const variant = key === "fajr" ? "fajr" : "regular";
+        if (prayer.current && prayer.current.test && prayer.current.variant === variant) {
+          stopAdhan();
+          return;
+        }
+        playAdhan(key, { test: true });
+      });
+    testButton("#adhan-test-fajr", "fajr");
+    testButton("#adhan-test-regular", "dhuhr");
+
+    $("#adhan-player-stop").addEventListener("click", () => {
+      const current = prayer.current;
+      if (current && current.blocked) {
+        current.audio.play().then(() => {
+          current.blocked = false;
+          showAdhanPlayer({ title: current.label, sub: current.sub, blocked: false });
+        }).catch(() => stopAdhan());
+        return;
+      }
+      stopAdhan();
+    });
+
+    $("#wake-switch").addEventListener("click", () => {
+      prayer.wake = !prayer.wake;
+      storage.set("QuraviaWake", prayer.wake);
+      if (prayer.wake) applyWakeLock();
+      else releaseWakeLock();
+      syncAdhanUI();
+    });
+
+    for (const audio of Object.values(adhanAudio)) {
+      audio.addEventListener("ended", stopAdhan);
+    }
+
+    // Browsers only allow sound after a user gesture: prepare the audio on the first tap.
+    const primeOnce = () => {
+      if (prayer.adhan.master) primeAdhanAudio();
+    };
+    document.addEventListener("pointerdown", primeOnce, { once: true });
+    document.addEventListener("keydown", primeOnce, { once: true });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        prayer.hiddenAt = Date.now();
+        return;
+      }
+      refreshPrayerOnResume();
+      applyWakeLock();
+    });
+    // Pages restored from the back/forward cache (and some installed-app resumes) do not fire visibilitychange.
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) refreshPrayerOnResume();
+    });
+  }
+
+  function initPrayer() {
+    if (typeof SumutCities === "undefined" || typeof PrayerTimes === "undefined") {
+      // Scripts failed to load: hide the feature instead of breaking the app.
+      $$('[data-go="prayer"]').forEach((item) => {
+        item.hidden = true;
+      });
+      return;
+    }
+    prayer.city = SumutCities.byId(storage.get("QuraviaCity", "medan"));
+    prayer.mode = storage.get("QuraviaCityMode", null);
+    prayer.todayKey = wibDayKey(Date.now());
+    const saved = storage.get("QuraviaAdhan", null);
+    if (saved && typeof saved === "object") {
+      prayer.adhan.master = Boolean(saved.master);
+      Object.assign(prayer.adhan.perPrayer, saved.perPrayer || {});
+    }
+    prayer.wake = Boolean(storage.get("QuraviaWake", false));
+    $("#wake-row").hidden = !("wakeLock" in navigator);
+    populateCities();
+    renderPrayerScreen();
+    setInterval(prayerTick, 1000);
+    if (prayer.wake) applyWakeLock();
+    if (!prayer.mode) {
+      $("#prayer-location-note").textContent = `Lokasi: ${prayer.city.name}. Ketuk ikon target untuk mengikuti lokasi Anda.`;
+    }
+    maybeFollowLocation();
+  }
+
+  // ===========================================================================
+  // Murottal (verse-by-verse recitation with synchronized scrolling)
+  // ===========================================================================
+  const RECITERS = [
+    { id: "alafasy", name: "Mishary Alafasy", folder: "Alafasy_128kbps", edition: "ar.alafasy", bitrate: 128 },
+    { id: "husary", name: "Mahmoud Al-Husary", folder: "Husary_64kbps", edition: "ar.husary", bitrate: 64 },
+    { id: "minshawy", name: "Al-Minshawi (Murattal)", folder: "Minshawy_Murattal_128kbps", edition: "ar.minshawi", bitrate: 64 },
+    { id: "abdulbasit", name: "Abdul Basit (Murattal)", folder: "Abdul_Basit_Murattal_64kbps", edition: "ar.abdulbasitmurattal", bitrate: 64 },
+  ];
+
+  const murottal = {
+    players: [new Audio(), new Audio()],
+    active: 0,
+    preloaded: null, // { index, surahId, verseId, reciterId }
+    surah: null,
+    verseId: 0,
+    status: "idle", // idle | loading | playing | paused | error
+    urls: [],
+    sourceIndex: 0,
+    switching: false,
+    continuous: storage.get("QuraviaMurottalContinuous", true),
+    follow: storage.get("QuraviaMurottalFollow", true),
+    reciterId: storage.get("QuraviaReciter", "alafasy"),
+  };
+
+  const mAudio = () => murottal.players[murottal.active];
+  const currentReciter = () => RECITERS.find((item) => item.id === murottal.reciterId) || RECITERS[0];
+  const pad3 = (value) => String(value).padStart(3, "0");
+
+  function verseAudioUrls(surahId, verseId) {
+    const reciter = currentReciter();
+    const primary = `https://everyayah.com/data/${reciter.folder}/${pad3(surahId)}${pad3(verseId)}.mp3`;
+    const before = state.surahs.slice(0, surahId - 1).reduce((sum, item) => sum + item.total_verses, 0);
+    const fallback = `https://cdn.islamic.network/quran/audio/${reciter.bitrate}/${reciter.edition}/${before + verseId}.mp3`;
+    return [primary, fallback];
+  }
+
+  const murottalTotal = () => (murottal.surah ? murottal.surah.verses.length : 0);
+  const verseCard = (id) => $(`.verse-card[data-verse="${id}"]`, $("#verse-list"));
+
+  function prepareMurottal(surah) {
+    murottal.surah = surah;
+    murottal.verseId = 0;
+    murottal.status = "idle";
+    $("#murottal-bar").hidden = false;
+    renderMurottalUI();
+  }
+
+  function renderMurottalUI() {
+    const total = murottalTotal();
+    const status = murottal.status;
+    const active = status !== "idle";
+    const playingLike = status === "playing" || status === "loading";
+
+    $$(".verse-card", $("#verse-list")).forEach((card) => {
+      const id = Number(card.dataset.verse);
+      const isCurrent = active && id === murottal.verseId;
+      card.classList.toggle("verse-card--playing", isCurrent);
+      const button = $(".verse-play", card);
+      button.classList.toggle("verse-play--playing", isCurrent && status === "playing");
+      button.classList.toggle("is-loading", isCurrent && status === "loading");
+      const label = isCurrent && playingLike ? `Jeda ayat ${id}` : `Putar ayat ${id}`;
+      button.setAttribute("aria-label", label);
+    });
+
+    const play = $("#murottal-play");
+    play.classList.toggle("is-playing", status === "playing");
+    play.classList.toggle("is-loading", status === "loading");
+    play.setAttribute("aria-label", playingLike ? "Jeda murottal" : "Putar murottal");
+
+    $("#murottal-title").textContent = murottal.surah ? murottal.surah.transliteration : "Murottal";
+    const verseText = active ? `Ayat ${murottal.verseId} dari ${total}` : `${total} ayat`;
+    const statusText = { idle: "Ketuk ▶ untuk memulai", loading: "Memuat audio…", playing: "Sedang diputar", paused: "Dijeda", error: "Audio gagal dimuat" }[status];
+    $("#murottal-sub").textContent = `${verseText} • ${statusText}`;
+    $("#murottal-prev").disabled = active && murottal.verseId <= 1;
+    $("#murottal-next").disabled = active && murottal.verseId >= total;
+    $("#murottal-continuous").setAttribute("aria-pressed", String(murottal.continuous));
+    $("#murottal-follow").setAttribute("aria-pressed", String(murottal.follow));
+    $("#murottal-reciter").value = murottal.reciterId;
+    updateMediaSession();
+  }
+
+  function setMurottalStatus(status) {
+    murottal.status = status;
+    renderMurottalUI();
+  }
+
+  function scrollToVerse(id) {
+    if (!murottal.follow) return;
+    const card = verseCard(id);
+    if (!card) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const tall = card.getBoundingClientRect().height > window.innerHeight * 0.55;
+    card.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: tall ? "start" : "center" });
+  }
+
+  // The idle player fetches the next verse while the current one plays, so the
+  // hand-over is gapless and nothing is downloaded twice.
+  function preloadNextVerse(nextId) {
+    murottal.preloaded = null;
+    const saveData = navigator.connection && navigator.connection.saveData;
+    if (!murottal.surah || nextId > murottalTotal() || !navigator.onLine || saveData) return;
+    const index = 1 - murottal.active;
+    const idle = murottal.players[index];
+    idle.preload = "auto";
+    idle.src = verseAudioUrls(murottal.surah.id, nextId)[0];
+    idle.load();
+    murottal.preloaded = { index, surahId: murottal.surah.id, verseId: nextId, reciterId: murottal.reciterId };
+  }
+
+  function playVerse(verseId) {
+    if (!murottal.surah || verseId < 1 || verseId > murottalTotal()) return;
+    stopAdhan();
+    murottal.verseId = verseId;
+    murottal.sourceIndex = 0;
+    murottal.urls = verseAudioUrls(murottal.surah.id, verseId);
+    murottal.switching = true;
+
+    const ready = murottal.preloaded;
+    const reuse = ready && ready.surahId === murottal.surah.id && ready.verseId === verseId && ready.reciterId === murottal.reciterId;
+    const previous = mAudio();
+    previous.pause();
+    if (reuse) {
+      murottal.active = ready.index;
+    } else {
+      murottal.players[1 - murottal.active].removeAttribute("src");
+      murottal.players[1 - murottal.active].load();
+      mAudio().src = murottal.urls[0];
+    }
+    murottal.preloaded = null;
+
+    const audio = mAudio();
+    audio.currentTime = 0;
+    setMurottalStatus("loading");
+    const attempt = audio.play();
+    if (attempt && attempt.catch) {
+      attempt.catch((error) => {
+        if (error && error.name === "AbortError") return;
+        murottal.switching = false;
+        if (error && error.name === "NotAllowedError") setMurottalStatus("paused");
+        else handleMurottalError();
+      });
+    }
+    scrollToVerse(verseId);
+    preloadNextVerse(verseId + 1);
+  }
+
+  function pauseMurottal() {
+    if (murottal.status === "playing" || murottal.status === "loading") {
+      mAudio().pause();
+      setMurottalStatus("paused");
+    }
+  }
+
+  function resumeMurottal() {
+    stopAdhan();
+    setMurottalStatus("loading");
+    const attempt = mAudio().play();
+    if (attempt && attempt.catch) attempt.catch(() => handleMurottalError());
+  }
+
+  function stopMurottal() {
+    if (murottal.status === "idle" && !murottal.players.some((player) => player.getAttribute("src"))) return;
+    murottal.status = "idle";
+    murottal.preloaded = null;
+    for (const player of murottal.players) {
+      player.pause();
+      player.removeAttribute("src");
+      player.load();
+    }
+    murottal.verseId = 0;
+    if (murottal.surah && state.currentScreen === "reader") renderMurottalUI();
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "none";
+  }
+
+  function handleMurottalError() {
+    if (murottal.status === "idle") return;
+    if (murottal.sourceIndex === 0 && murottal.urls[1]) {
+      murottal.sourceIndex = 1;
+      mAudio().src = murottal.urls[1];
+      const attempt = mAudio().play();
+      if (attempt && attempt.catch) attempt.catch(() => {});
+      return;
+    }
+    murottal.switching = false;
+    setMurottalStatus("error");
+    showToast("Audio murottal tidak dapat dimuat. Periksa koneksi internet lalu coba lagi.");
+  }
+
+  function firstVisibleVerse() {
+    const cards = $$(".verse-card", $("#verse-list"));
+    const found = cards.find((card) => card.getBoundingClientRect().bottom > 130);
+    return found ? Number(found.dataset.verse) : 1;
+  }
+
+  function toggleVerse(verseId) {
+    const sameVerse = murottal.status !== "idle" && murottal.verseId === verseId;
+    if (sameVerse) {
+      if (murottal.status === "playing" || murottal.status === "loading") pauseMurottal();
+      else if (murottal.status === "paused") resumeMurottal();
+      else playVerse(verseId);
+      return;
+    }
+    playVerse(verseId);
+  }
+
+  function toggleMainMurottal() {
+    if (murottal.status === "playing" || murottal.status === "loading") pauseMurottal();
+    else if (murottal.status === "paused") resumeMurottal();
+    else playVerse(murottal.status === "error" && murottal.verseId ? murottal.verseId : firstVisibleVerse());
+  }
+
+  function updateMediaSession() {
+    if (!("mediaSession" in navigator) || !murottal.surah || murottal.status === "idle") return;
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: `${murottal.surah.transliteration} • Ayat ${murottal.verseId}`,
+        artist: currentReciter().name,
+        album: "Quravia",
+        artwork: [{ src: "./assets/icon-512.png", sizes: "512x512", type: "image/png" }],
+      });
+      navigator.mediaSession.playbackState = murottal.status === "playing" ? "playing" : "paused";
+    } catch {
+      /* Media Session is optional */
+    }
+  }
+
+  function bindMurottalEvents() {
+    for (const audio of murottal.players) {
+      audio.preload = "auto";
+      const isActive = () => audio === mAudio();
+      audio.addEventListener("playing", () => {
+        if (!isActive()) return;
+        murottal.switching = false;
+        if (murottal.status !== "idle") setMurottalStatus("playing");
+      });
+      audio.addEventListener("waiting", () => {
+        if (isActive() && murottal.status === "playing") setMurottalStatus("loading");
+      });
+      audio.addEventListener("pause", () => {
+        if (!isActive() || murottal.switching || audio.ended) return;
+        if (murottal.status === "playing" || murottal.status === "loading") setMurottalStatus("paused");
+      });
+      audio.addEventListener("ended", () => {
+        if (!isActive()) return;
+        if (murottal.continuous && murottal.verseId < murottalTotal()) {
+          playVerse(murottal.verseId + 1);
+        } else {
+          const finished = murottal.verseId;
+          setMurottalStatus("paused");
+          audio.currentTime = 0;
+          $("#murottal-sub").textContent = `Ayat ${finished} dari ${murottalTotal()} • Selesai`;
+        }
+      });
+      audio.addEventListener("error", () => {
+        if (isActive()) handleMurottalError();
+      });
+    }
+
+    $("#murottal-play").addEventListener("click", toggleMainMurottal);
+    $("#murottal-prev").addEventListener("click", () => playVerse(murottal.status === "idle" ? firstVisibleVerse() : murottal.verseId - 1));
+    $("#murottal-next").addEventListener("click", () => playVerse(murottal.status === "idle" ? firstVisibleVerse() : murottal.verseId + 1));
+    $("#murottal-continuous").addEventListener("click", () => {
+      murottal.continuous = !murottal.continuous;
+      storage.set("QuraviaMurottalContinuous", murottal.continuous);
+      renderMurottalUI();
+      showToast(murottal.continuous ? "Memutar ayat berikutnya otomatis." : "Berhenti setelah satu ayat.");
+    });
+    $("#murottal-follow").addEventListener("click", () => {
+      murottal.follow = !murottal.follow;
+      storage.set("QuraviaMurottalFollow", murottal.follow);
+      renderMurottalUI();
+      if (murottal.follow && murottal.status !== "idle") scrollToVerse(murottal.verseId);
+      showToast(murottal.follow ? "Layar mengikuti ayat yang dibacakan." : "Layar tidak lagi bergulir otomatis.");
+    });
+    $("#murottal-reciter").addEventListener("change", (event) => {
+      murottal.reciterId = event.target.value;
+      storage.set("QuraviaReciter", murottal.reciterId);
+      if (murottal.status === "playing" || murottal.status === "loading") playVerse(murottal.verseId);
+      else renderMurottalUI();
+    });
+  }
+
+  function initMurottal() {
+    $("#murottal-reciter").innerHTML = RECITERS.map((item) => `<option value="${item.id}">${escapeHTML(item.name)}</option>`).join("");
+    $("#murottal-reciter").value = murottal.reciterId;
+    if (!("mediaSession" in navigator)) return;
+    const actions = {
+      play: () => (murottal.status === "paused" ? resumeMurottal() : toggleMainMurottal()),
+      pause: pauseMurottal,
+      previoustrack: () => murottal.verseId > 1 && playVerse(murottal.verseId - 1),
+      nexttrack: () => murottal.verseId < murottalTotal() && playVerse(murottal.verseId + 1),
+    };
+    for (const [name, handler] of Object.entries(actions)) {
+      try {
+        navigator.mediaSession.setActionHandler(name, handler);
+      } catch {
+        /* unsupported action */
+      }
+    }
+  }
+
+  // ---- Donation button (navbar). The address comes from js/site-config.js ----
+  function safeExternalUrl(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    try {
+      const url = new URL(value.trim());
+      return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function initDonation() {
+    const link = $("#donate-link");
+    const configured = window.QURAVIA_CONFIG && window.QURAVIA_CONFIG.donationUrl;
+    const href = safeExternalUrl(configured);
+    if (!href) {
+      link.hidden = true; // no (valid) address configured: show nothing rather than a dead button
+      if (configured) console.warn("[Quravia] donationUrl tidak valid; harus diawali https:// atau http://");
+      return;
+    }
+    link.href = href;
+    link.hidden = false;
+  }
+
+  // ---- Theme (light by default; the saved choice is applied before first paint by js/theme-init.js) ----
+  function currentTheme() {
+    return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+  }
+
+  function applyTheme(theme) {
+    const root = document.documentElement;
+    root.setAttribute("data-theme", theme);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#000000" : "#ffffff");
+    const toggle = $("#theme-toggle");
+    const label = theme === "dark" ? "Aktifkan mode terang" : "Aktifkan mode gelap";
+    toggle.setAttribute("aria-label", label);
+    toggle.setAttribute("title", label);
+  }
+
+  function initTheme() {
+    applyTheme(currentTheme());
+    $("#theme-toggle").addEventListener("click", () => {
+      const next = currentTheme() === "dark" ? "light" : "dark";
+      document.documentElement.classList.add("theme-animating");
+      applyTheme(next);
+      storage.set("QuraviaTheme", next);
+      setTimeout(() => document.documentElement.classList.remove("theme-animating"), 300);
+    });
+  }
+
+  // ===========================================================================
+  // Tajweed colours
+  // ===========================================================================
+  const TAJWEED_LEGEND = [
+  {
+    "id": "ghunnah",
+    "desc": "Nun atau mim bertasydid (نّ  مّ).",
+    "how": "Didengungkan sekitar dua harakat.",
+    "sample": "ءَامَنَّا"
+  },
+  {
+    "id": "idgham-ghunnah",
+    "desc": "Nun mati atau tanwin bertemu ي ن م و.",
+    "how": "Dilebur ke huruf berikutnya dengan dengung.",
+    "sample": "مَن يَقُولُ"
+  },
+  {
+    "id": "idgham-bila",
+    "desc": "Nun mati atau tanwin bertemu ل atau ر.",
+    "how": "Dilebur ke huruf berikutnya tanpa dengung.",
+    "sample": "يَكُن لَّهُۥ"
+  },
+  {
+    "id": "mithlayn",
+    "desc": "Dua huruf yang sama bertemu; yang pertama mati.",
+    "how": "Dilebur menjadi satu huruf bertasydid (mim+mim, ba+ba, dst.).",
+    "sample": "ٱضۡرِب بِّعَصَاكَ"
+  },
+  {
+    "id": "iqlab",
+    "desc": "Nun mati atau tanwin bertemu ب.",
+    "how": "Diganti mim samar dengan dengung (tanda ۢ).",
+    "sample": "مِنۢ بَعۡدِ"
+  },
+  {
+    "id": "ikhfa",
+    "desc": "Nun mati atau tanwin bertemu salah satu dari 15 huruf ikhfa.",
+    "how": "Dibaca samar dengan dengung.",
+    "sample": "يَنقُضُونَ"
+  },
+  {
+    "id": "ikhfa-shafawi",
+    "desc": "Mim mati bertemu ب.",
+    "how": "Dibaca samar di bibir dengan dengung.",
+    "sample": "تَرۡمِيهِم بِحِجَارَةٖ"
+  },
+  {
+    "id": "qalqalah",
+    "desc": "Huruf ق ط ب ج د yang mati, atau di akhir ayat saat berhenti.",
+    "how": "Dipantulkan dengan bunyi memantul.",
+    "sample": "ٱلۡأَبۡتَرُ"
+  }
+];
+
+  const tajweed = {
+    enabled: storage.get("QuraviaTajweed", false) === true,
+  };
+
+  function arabicHTML(text) {
+    if (tajweed.enabled && typeof Tajweed !== "undefined") return Tajweed.toHTML(text, escapeHTML);
+    return escapeHTML(text);
+  }
+
+  function lockPageScroll() {
+    const open = ["#tajweed-sheet", "#share-sheet", "#mosque-sheet"].some((selector) => !$(selector).hidden);
+    document.body.style.overflow = open ? "hidden" : "";
+  }
+
+  function renderTajweedLegend() {
+    const rules = new Map(Tajweed.RULES.map((rule) => [rule.id, rule]));
+    $("#tajweed-legend").innerHTML = TAJWEED_LEGEND.map((item) => {
+      const rule = rules.get(item.id);
+      return `
+        <li class="tajweed-row">
+          <span class="tajweed-sample" lang="ar" dir="rtl">${Tajweed.toHTML(item.sample, escapeHTML, { verseEnd: false })}</span>
+          <div class="tajweed-info">
+            <strong><i class="tajweed-dot tj-bg-${item.id}" aria-hidden="true"></i>${escapeHTML(rule.name)} <em>${escapeHTML(rule.colorName)}</em></strong>
+            <small>${escapeHTML(item.desc)} ${escapeHTML(item.how)}</small>
+          </div>
+        </li>`;
+    }).join("");
+  }
+
+  function openTajweedLegend() {
+    $("#tajweed-sheet").hidden = false;
+    lockPageScroll();
+    $("#tajweed-sheet .primary-button").focus({ preventScroll: true });
+  }
+
+  function closeTajweedLegend() {
+    $("#tajweed-sheet").hidden = true;
+    lockPageScroll();
+  }
+
+  function syncTajweedSwitch() {
+    const toggle = $("#tajweed-switch");
+    toggle.setAttribute("aria-checked", String(tajweed.enabled));
+    toggle.setAttribute("aria-label", tajweed.enabled ? "Sembunyikan warna tajwid" : "Tampilkan warna tajwid");
+  }
+
+  function applyTajweedToVerses() {
+    const surah = state.currentSurah;
+    if (!surah) return;
+    $$(".verse-card", $("#verse-list")).forEach((card) => {
+      const verse = surah.verses[Number(card.dataset.verse) - 1];
+      if (verse) $(".verse-arabic", card).innerHTML = arabicHTML(verse.text);
+    });
+  }
+
+  function setTajweed(enabled, options = {}) {
+    tajweed.enabled = Boolean(enabled);
+    storage.set("QuraviaTajweed", tajweed.enabled);
+    syncTajweedSwitch();
+    applyTajweedToVerses();
+    if (tajweed.enabled && options.showLegend !== false) openTajweedLegend();
+  }
+
+  function initTajweed() {
+    if (typeof Tajweed === "undefined") {
+      // Script missing: hide the control instead of leaving a dead switch.
+      $(".tajweed-control").hidden = true;
+      return;
+    }
+    renderTajweedLegend();
+    syncTajweedSwitch();
+    $("#tajweed-switch").addEventListener("click", () => setTajweed(!tajweed.enabled));
+    $("#tajweed-help").addEventListener("click", openTajweedLegend);
+    $$("[data-close-tajweed]").forEach((button) => button.addEventListener("click", closeTajweedLegend));
+  }
+
+  // ===========================================================================
+  // Share a verse as an image
+  // ===========================================================================
+  const share = {
+    surah: null,
+    verse: null,
+    platform: storage.get("QuraviaSharePlatform", "whatsapp"),
+    showLatin: storage.get("QuraviaShareLatin", false) === true,
+    showTranslation: storage.get("QuraviaShareTranslation", true) !== false,
+    blob: null,
+    key: "",
+    token: 0,
+    nativeFiles: false,
+    info: null,
+  };
+
+  const shareFormat = () => ShareImage.PLATFORMS[share.platform].format;
+  const shareFileName = () =>
+    `quravia-qs-${share.surah.id}-${share.verse.id}-${share.platform}-${ShareImage.FORMATS[shareFormat()].label.replace(/\s*×\s*/, "x")}.png`;
+
+  function syncShareControls() {
+    const platform = ShareImage.PLATFORMS[share.platform];
+    $$(".share-platform").forEach((button) => button.setAttribute("aria-checked", String(button.dataset.platform === share.platform)));
+    $("#share-latin").setAttribute("aria-pressed", String(share.showLatin));
+    $("#share-translation").setAttribute("aria-pressed", String(share.showTranslation));
+    $("#share-preview").dataset.format = platform.format;
+    $("#share-size").textContent = `${platform.name}: gambar ${ShareImage.FORMATS[platform.format].label} piksel (${platform.format === "story" ? "vertikal 9:16" : "persegi 1:1"}).`;
+  }
+
+  function setShareBusy(busy) {
+    $("#share-spinner").hidden = !busy;
+    $("#share-native").disabled = busy;
+    $("#share-download").disabled = busy;
+    $("#share-preview").classList.toggle("share-preview--busy", busy);
+  }
+
+  async function refreshShareImage(force = false) {
+    const verse = share.verse;
+    if (!verse) return;
+    // Same picture for WhatsApp/TikTok (and for Instagram/Facebook): only redraw when something visible changed.
+    const key = [share.surah.id, verse.id, shareFormat(), share.showLatin, share.showTranslation, tajweed.enabled].join("|");
+    if (!force && key === share.key && share.blob) {
+      setShareBusy(false);
+      return;
+    }
+    const token = (share.token += 1);
+    setShareBusy(true);
+    share.blob = null;
+    try {
+      const arabicEl = $(`.verse-card[data-verse="${verse.id}"] .verse-arabic`);
+      const canvas = await ShareImage.render({
+        format: shareFormat(),
+        surahName: share.surah.transliteration,
+        verseId: verse.id,
+        arabic: verse.text,
+        latin: verse.transliteration,
+        translation: verse.translation,
+        tajweed: tajweed.enabled,
+        showLatin: share.showLatin,
+        showTranslation: share.showTranslation,
+        arabicFamily: arabicEl ? getComputedStyle(arabicEl).fontFamily : undefined,
+        logoSrc: "./assets/logo-mark-306.png",
+      });
+      if (token !== share.token) return;
+      const preview = $("#share-canvas");
+      preview.width = 540;
+      preview.height = Math.round((540 * canvas.height) / canvas.width);
+      const context = preview.getContext("2d");
+      context.imageSmoothingQuality = "high";
+      context.drawImage(canvas, 0, 0, preview.width, preview.height);
+      const blob = await ShareImage.toBlob(canvas);
+      if (token !== share.token) return;
+      share.blob = blob;
+      share.key = key;
+      share.info = canvas.info;
+      setShareBusy(false);
+    } catch {
+      if (token !== share.token) return;
+      setShareBusy(true);
+      $("#share-spinner").hidden = true;
+      $("#share-hint").textContent = "Gambar belum dapat dibuat di perangkat ini. Coba lagi.";
+    }
+  }
+
+  function openShare(verseId) {
+    const surah = state.currentSurah;
+    const verse = surah && surah.verses[verseId - 1];
+    if (!verse) return;
+    pauseMurottal();
+    share.surah = surah;
+    share.verse = verse;
+    share.key = "";
+    $("#share-ref").textContent = `QS. ${surah.transliteration} : ${verse.id}`;
+    $("#share-hint").textContent = share.nativeFiles
+      ? "Menekan “Bagikan” membuka menu berbagi perangkat; pilih aplikasi tujuan (WhatsApp, Instagram, Facebook, TikTok, dll.)."
+      : "Perangkat ini belum mendukung berbagi langsung. Simpan gambar, lalu unggah ke aplikasi tujuan.";
+    $("#share-native").hidden = !share.nativeFiles;
+    $("#share-download").classList.toggle("share-secondary--primary", !share.nativeFiles);
+    syncShareControls();
+    $("#share-sheet").hidden = false;
+    lockPageScroll();
+    refreshShareImage(true);
+  }
+
+  function closeShare() {
+    $("#share-sheet").hidden = true;
+    share.token += 1; // ignore a render that is still running
+    lockPageScroll();
+  }
+
+  function downloadShareImage() {
+    if (!share.blob) return;
+    const url = URL.createObjectURL(share.blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = shareFileName();
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showToast("Gambar disimpan. Unggah ke aplikasi tujuan Anda.");
+  }
+
+  async function shareNative() {
+    if (!share.blob) return;
+    const file = new File([share.blob], shareFileName(), { type: "image/png" });
+    const data = {
+      files: [file],
+      title: `QS. ${share.surah.transliteration} : ${share.verse.id}`,
+      text: `QS. ${share.surah.transliteration} : ${share.verse.id} • Quravia SUMUT`,
+    };
+    try {
+      if (navigator.canShare && navigator.canShare(data)) await navigator.share(data);
+      else downloadShareImage();
+    } catch (error) {
+      if (error && error.name !== "AbortError") downloadShareImage(); // the user closing the share menu is not an error
+    }
+  }
+
+  function initShare() {
+    if (typeof ShareImage === "undefined") return;
+    try {
+      share.nativeFiles = Boolean(
+        navigator.canShare && navigator.canShare({ files: [new File([new Blob(["x"])], "x.png", { type: "image/png" })] }),
+      );
+    } catch {
+      share.nativeFiles = false;
+    }
+    if (!ShareImage.PLATFORMS[share.platform]) share.platform = "whatsapp";
+    $$("[data-close-share]").forEach((button) => button.addEventListener("click", closeShare));
+    $$(".share-platform").forEach((button) =>
+      button.addEventListener("click", () => {
+        share.platform = button.dataset.platform;
+        storage.set("QuraviaSharePlatform", share.platform);
+        syncShareControls();
+        refreshShareImage();
+      }),
+    );
+    $("#share-latin").addEventListener("click", () => {
+      share.showLatin = !share.showLatin;
+      storage.set("QuraviaShareLatin", share.showLatin);
+      syncShareControls();
+      refreshShareImage();
+    });
+    $("#share-translation").addEventListener("click", () => {
+      share.showTranslation = !share.showTranslation;
+      storage.set("QuraviaShareTranslation", share.showTranslation);
+      syncShareControls();
+      refreshShareImage();
+    });
+    $("#share-native").addEventListener("click", shareNative);
+    $("#share-download").addEventListener("click", downloadShareImage);
   }
 
   function openInstallHelp() {
@@ -830,6 +2186,16 @@
     $("#font-decrease").addEventListener("click", () => setArabicSize(state.arabicSize - 2));
     $("#font-increase").addEventListener("click", () => setArabicSize(state.arabicSize + 2));
     $("#verse-list").addEventListener("click", (event) => {
+      const shareButton = event.target.closest("[data-share]");
+      if (shareButton) {
+        safely("bagikan", () => openShare(Number(shareButton.dataset.share)));
+        return;
+      }
+      const playButton = event.target.closest("[data-play]");
+      if (playButton) {
+        toggleVerse(Number(playButton.dataset.play));
+        return;
+      }
       const button = event.target.closest("[data-bookmark]");
       if (!button) return;
       const key = button.dataset.bookmark;
@@ -863,7 +2229,15 @@
 
     $("#check-location").addEventListener("click", verifyLocation);
     $("#enable-compass").addEventListener("click", enableCompass);
-    $("#find-mosque").addEventListener("click", findNearestMosque);
+    $("#find-mosque").addEventListener("click", () => findNearestMosque());
+    $("#mosque-retry").addEventListener("click", () => findNearestMosque(true));
+    $$("[data-close-mosque]").forEach((button) => button.addEventListener("click", closeMosqueSheet));
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      if (!$("#share-sheet").hidden) closeShare();
+      else if (!$("#tajweed-sheet").hidden) closeTajweedLegend();
+      else if (!$("#mosque-sheet").hidden) closeMosqueSheet();
+    });
     document.addEventListener("visibilitychange", syncCompass);
     $("#install-button").addEventListener("click", handleInstall);
     $$('[data-close-modal]').forEach((button) => button.addEventListener("click", () => { $("#install-help").hidden = true; }));
@@ -872,6 +2246,9 @@
       storage.set("QuraviaOnboarded", true);
       $("#onboarding").hidden = true;
     });
+
+    safely("pengikat jadwal salat", bindPrayerEvents);
+    safely("pengikat murottal", bindMurottalEvents);
 
     window.addEventListener("online", () => showToast("Koneksi internet kembali tersedia."));
     window.addEventListener("offline", () => showToast("Mode offline aktif. Al-Qur’an tetap dapat dibaca."));
@@ -904,8 +2281,17 @@
     $("#onboarding").hidden = storage.get("QuraviaOnboarded", false);
     document.documentElement.style.setProperty("--arabic-size", `${state.arabicSize}px`);
     bindEvents();
-    updateTasbih();
-    setupInstallPrompt();
+    safely("jadwal salat", initPrayer);
+    safely("murottal", initMurottal);
+    safely("tasbih", updateTasbih);
+    safely("pemasangan", setupInstallPrompt);
+    safely("tema", initTheme);
+    safely("tajwid", initTajweed);
+    safely("bagikan", initShare);
+    safely("donasi", initDonation);
+    safely("footer", () => {
+      $("#footer-year").textContent = String(new Date().getFullYear());
+    });
     registerServiceWorker();
     loadQuranIndex();
   }
