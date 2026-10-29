@@ -112,3 +112,5 @@ Tanpa ini, browser yang pernah membuka versi lama dapat memuat campuran berkas l
 Teks Utsmani, transliterasi, dan terjemahan Indonesia berasal dari paket `quran-json` 3.1.2 oleh Risan Bagja Pradana, berlisensi CC BY 4.0. Jangan mengubah teks Arab tanpa proses verifikasi ilmiah.
 
 Data batas geofence disederhanakan dari batas provinsi Sumatera Utara yang bersumber dari peta administrasi Indonesia. Geofence ditujukan untuk pembatasan fitur aplikasi, bukan penetapan batas hukum.
+#   Q u r a v i a S U M U T  
+ 
